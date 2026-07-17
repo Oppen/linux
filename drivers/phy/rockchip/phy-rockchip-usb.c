@@ -310,6 +310,14 @@ err_clk:
 	return err;
 }
 
+static const struct rockchip_usb_phy_pdata rk3026_pdata = {
+	.phys = (struct rockchip_usb_phys[]){
+		{ .reg = 0x17c, .pll_name = "sclk_otgphy0" }, /* GRF_UOC0_CON0 */
+		{ .reg = 0x190, .pll_name = "sclk_otgphy1" }, /* GRF_UOC1_CON0 */
+		{ /* sentinel */ }
+	},
+};
+
 static const struct rockchip_usb_phy_pdata rk3066a_pdata = {
 	.phys = (struct rockchip_usb_phys[]){
 		{ .reg = 0x17c, .pll_name = "sclk_otgphy0_480m" },
@@ -482,6 +490,7 @@ static int rockchip_usb_phy_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id rockchip_usb_phy_dt_ids[] = {
+	{ .compatible = "rockchip,rk3026-usb-phy",  .data = &rk3026_pdata },
 	{ .compatible = "rockchip,rk3066a-usb-phy", .data = &rk3066a_pdata },
 	{ .compatible = "rockchip,rk3188-usb-phy", .data = &rk3188_pdata },
 	{ .compatible = "rockchip,rk3288-usb-phy", .data = &rk3288_pdata },

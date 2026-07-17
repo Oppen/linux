@@ -4720,6 +4720,22 @@ static struct rockchip_pin_ctrl rk3036_pin_ctrl = {
 		.pull_calc_reg		= rk2928_calc_pull_reg_and_bit,
 };
 
+static struct rockchip_pin_bank rk3026_pin_banks[] = {
+	PIN_BANK(0, 32, "gpio0"),
+	PIN_BANK(1, 32, "gpio1"),
+	PIN_BANK(2, 32, "gpio2"),
+	PIN_BANK(3, 32, "gpio3"),
+};
+
+static struct rockchip_pin_ctrl rk3026_pin_ctrl = {
+		.pin_banks      = rk3026_pin_banks,
+		.nr_banks       = ARRAY_SIZE(rk3026_pin_banks),
+		.label          = "RK3026-GPIO",
+		.type           = RK2928,
+		.grf_mux_offset = 0xa8,
+		.pull_calc_reg  = rk2928_calc_pull_reg_and_bit,
+};
+
 static struct rockchip_pin_bank rk3066a_pin_banks[] = {
 	PIN_BANK(0, 32, "gpio0"),
 	PIN_BANK(1, 32, "gpio1"),
@@ -5269,6 +5285,8 @@ static const struct of_device_id rockchip_pinctrl_dt_match[] = {
 		.data = &rk2928_pin_ctrl },
 	{ .compatible = "rockchip,rk3036-pinctrl",
 		.data = &rk3036_pin_ctrl },
+	{ .compatible = "rockchip,rk3026-pinctrl",
+	  .data = &rk3026_pin_ctrl },
 	{ .compatible = "rockchip,rk3066a-pinctrl",
 		.data = &rk3066a_pin_ctrl },
 	{ .compatible = "rockchip,rk3066b-pinctrl",

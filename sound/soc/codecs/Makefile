@@ -230,6 +230,7 @@ snd-soc-pcm6240-y := pcm6240.o
 snd-soc-peb2466-y := peb2466.o
 snd-soc-pm4125-y := pm4125.o
 snd-soc-pm4125-sdw-y := pm4125-sdw.o
+snd-soc-rk3026-objs := rk3026.o
 snd-soc-rk3308-y := rk3308_codec.o
 snd-soc-rk3328-y := rk3328_codec.o
 snd-soc-rk817-y := rk817_codec.o
@@ -666,6 +667,7 @@ ifdef CONFIG_SND_SOC_PM4125_SDW
 # avoid link failure by forcing sdw code built-in when needed
 obj-$(CONFIG_SND_SOC_PM4125) += snd-soc-pm4125-sdw.o
 endif
+obj-$(CONFIG_SND_SOC_RK3026)	+= snd-soc-rk3026.o
 obj-$(CONFIG_SND_SOC_RK3308)	+= snd-soc-rk3308.o
 obj-$(CONFIG_SND_SOC_RK3328)	+= snd-soc-rk3328.o
 obj-$(CONFIG_SND_SOC_RK817)	+= snd-soc-rk817.o

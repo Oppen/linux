@@ -22,6 +22,7 @@ obj-$(CONFIG_CLK_RV1103B)	+= clk-rv1103b.o
 obj-$(CONFIG_CLK_RV110X)        += clk-rv1108.o
 obj-$(CONFIG_CLK_RV1126)        += clk-rv1126.o
 obj-$(CONFIG_CLK_RV1126B)	+= clk-rv1126b.o rst-rv1126b.o
+obj-$(CONFIG_CLK_RK3026)        += clk-rk3026.o
 obj-$(CONFIG_CLK_RK3036)        += clk-rk3036.o
 obj-$(CONFIG_CLK_RK312X)        += clk-rk3128.o
 obj-$(CONFIG_CLK_RK3188)        += clk-rk3188.o

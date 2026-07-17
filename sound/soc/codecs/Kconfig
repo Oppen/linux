@@ -1662,6 +1662,13 @@ config SND_SOC_PM4125_SDW
 	  like QCM2290, and it is connected via soundwire and SPMI.
 	  To compile this codec driver say Y or m.
 
+config SND_SOC_RK3026
+	tristate "Rockchip RK3026 internal codec"
+	depends on ARCH_ROCKCHIP || COMPILE_TEST
+	select REGMAP_MMIO
+	help
+	  Enable support for the internal audio codec of the Rockchip RK3026 SoC.
+
 config SND_SOC_RK3308
 	tristate "Rockchip RK3308 audio CODEC"
 	depends on ARM64 || COMPILE_TEST

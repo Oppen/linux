@@ -44,6 +44,13 @@ config CLK_RV1126B
 	help
 	  Build the driver for RV1126B Clock Driver.
 
+config CLK_RK3026
+	bool "Rockchip RK3026 clock controller support"
+	depends on ARM || COMPILE_TEST
+	default y
+	help
+	  Build the driver for RK3026 Clock Driver.
+
 config CLK_RK3036
 	bool "Rockchip RK3036 clock controller support"
 	depends on ARM || COMPILE_TEST
