@@ -668,15 +668,24 @@
 		};
 	};
 
+	/*
+	 * These inputs ask for the pad's built-in pull, not bias-pull-up:
+	 * RK2928-class pads have one pull bit per pin, so the direction is the
+	 * pad's own and only on/off is selectable.  bias-pull-up makes
+	 * set_pull() return -ENOTSUPP, and rockchip_pinctrl_set_state() aborts a
+	 * group on the first error -- so the whole group would be dropped.
+	 * Live pull registers confirm every one of these pads has its pull
+	 * enabled (docs/HARDWARE-CONSTANTS.md §6).
+	 */
 	buttons {
 		pwrbtn: pwrbtn {
-			rockchip,pins = <1 4 0 &pcfg_pull_up>;
+			rockchip,pins = <1 4 0 &pcfg_pull_default>;
 		};
 	};
 
 	touchscreen {
 		touch_int: touch-int {
-			rockchip,pins = <1 8 0 &pcfg_pull_up>;
+			rockchip,pins = <1 8 0 &pcfg_pull_default>;
 		};
 
 		touch_rst: touch-rst {
@@ -686,7 +695,7 @@
 
 	pmic {
 		pmu_int: pmu-int {
-			rockchip,pins = <1 9 0 &pcfg_pull_up>;
+			rockchip,pins = <1 9 0 &pcfg_pull_default>;
 		};
 	};
 
@@ -704,21 +713,21 @@
 	rtc {
 		/* RTC_INT_PIN = RK30_PIN1_PB3 = GPIO1 pin 11 */
 		rtc_int: rtc-int {
-			rockchip,pins = <1 11 0 &pcfg_pull_up>;
+			rockchip,pins = <1 11 0 &pcfg_pull_default>;
 		};
 	};
 
 	keys {
 		key_left: key-left {
-			rockchip,pins = <2 13 0 &pcfg_pull_up>;
+			rockchip,pins = <2 13 0 &pcfg_pull_default>;
 		};
 
 		key_right: key-right {
-			rockchip,pins = <2 19 0 &pcfg_pull_up>;
+			rockchip,pins = <2 19 0 &pcfg_pull_default>;
 		};
 
 		key_down: key-down {
-			rockchip,pins = <2 14 0 &pcfg_pull_up>;
+			rockchip,pins = <2 14 0 &pcfg_pull_default>;
 		};
 	};
 };
