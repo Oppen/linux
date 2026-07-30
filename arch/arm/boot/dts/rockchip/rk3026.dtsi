@@ -1,0 +1,823 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Device Tree Source for Rockchip RK3026 SoC
+ *
+ * Copyright (c) 2024-2026
+ *
+ * Based on vendor kernel sources and RK3036 mainline DTS
+ */
+
+#include <dt-bindings/clock/rk3026-cru.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	compatible = "rockchip,rk3026";
+	interrupt-parent = <&gic>;
+
+	aliases {
+		gpio0 = &gpio0;
+		gpio1 = &gpio1;
+		gpio2 = &gpio2;
+		gpio3 = &gpio3;
+		i2c0 = &i2c0;
+		i2c1 = &i2c1;
+		i2c2 = &i2c2;
+		i2c3 = &i2c3;
+		serial0 = &uart0;
+		serial1 = &uart1;
+		serial2 = &uart2;
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a9";
+			reg = <0x0>;
+			clocks = <&cru ARMCLK>;
+			operating-points-v2 = <&cpu0_opp_table>;
+			#cooling-cells = <2>; /* min followed by max */
+		};
+
+		cpu1: cpu@1 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a9";
+			reg = <0x1>;
+			clocks = <&cru ARMCLK>;
+			operating-points-v2 = <&cpu0_opp_table>;
+		};
+	};
+
+	cpu0_opp_table: opp-table-0 {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		/* Live: APLL = 912 MHz (CRU APLL_CON0/CON1 = 0x204c/0x1441 =>
+		 * 24 MHz * 76 / (1*2*1)) with clk_core divider 1, and the vendor
+		 * cpufreq table holds this single point
+		 * (scaling_available_frequencies = "912000"). */
+		opp-912000000 {
+			opp-hz = /bits/ 64 <912000000>;
+			opp-microvolt = <1200000>;
+			opp-suspend;
+		};
+	};
+
+	arm-pmu {
+		compatible = "arm,cortex-a9-pmu";
+		interrupts = <GIC_SPI 86 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 87 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-affinity = <&cpu0>, <&cpu1>;
+	};
+
+	/*
+	 * No "arm,armv7-timer" node: RK3026 is Cortex-A9, which has no ARM
+	 * architected generic timer (that is ARMv7VE / Cortex-A7 and later).
+	 * Timekeeping comes from the Cortex-A9 global/TWD timers above and the
+	 * Rockchip timer at 0x20044000 below.
+	 */
+
+	xin24m: oscillator {
+		compatible = "fixed-clock";
+		clock-frequency = <24000000>;
+		clock-output-names = "xin24m";
+		#clock-cells = <0>;
+	};
+
+	sram: sram@10080000 {
+		compatible = "mmio-sram";
+		reg = <0x10080000 0x2000>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges = <0 0x10080000 0x2000>;
+	};
+
+	gic: interrupt-controller@1013d000 {
+		compatible = "arm,cortex-a9-gic";
+		interrupt-controller;
+		#interrupt-cells = <3>;
+		#address-cells = <0>;
+		reg = <0x1013d000 0x1000>,
+		      <0x1013c100 0x100>;
+	};
+
+	global_timer: timer@1013c200 {
+		compatible = "arm,cortex-a9-global-timer";
+		reg = <0x1013c200 0x20>;
+		interrupts = <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)>;
+		clocks = <&cru CORE_PERI>;
+	};
+
+	local_timer: timer@1013c600 {
+		compatible = "arm,cortex-a9-twd-timer";
+		reg = <0x1013c600 0x20>;
+		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)>;
+		clocks = <&cru CORE_PERI>;
+	};
+
+	l2: cache-controller@10138000 {
+		compatible = "arm,pl310-cache";
+		reg = <0x10138000 0x1000>;
+		cache-unified;
+		cache-level = <2>;
+		arm,tag-latency = <1 1 1>;
+		arm,data-latency = <1 2 1>;
+	};
+
+	cru: clock-controller@20000000 {
+		compatible = "rockchip,rk3026-cru";
+		reg = <0x20000000 0x1000>;
+		rockchip,grf = <&grf>;
+		#clock-cells = <1>;
+		#reset-cells = <1>;
+	};
+
+	grf: syscon@20008000 {
+		compatible = "rockchip,rk3026-grf", "syscon", "simple-mfd";
+		reg = <0x20008000 0x1000>;
+
+		usbphy: usbphy {
+			compatible = "rockchip,rk3026-usb-phy";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+
+			usb_otg_phy: usb-phy@17c {
+				reg = <0x17c>;
+				clocks = <&cru USBPHY_480M>;
+				clock-names = "phyclk";
+				#phy-cells = <0>;
+			};
+
+			usb_host_phy: usb-phy@190 {
+				reg = <0x190>;
+				clocks = <&cru USBPHY_480M>;
+				clock-names = "phyclk";
+				#phy-cells = <0>;
+			};
+		};
+	};
+
+	uart0: serial@20060000 {
+		compatible = "rockchip,rk3026-uart", "snps,dw-apb-uart";
+		reg = <0x20060000 0x100>;
+		interrupts = <GIC_SPI 20 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru SCLK_UART0>, <&cru PCLK_UART0>;
+		clock-names = "baudclk", "apb_pclk";
+		reg-shift = <2>;
+		reg-io-width = <4>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&uart0_xfer>;
+		status = "disabled";
+	};
+
+	uart1: serial@20064000 {
+		compatible = "rockchip,rk3026-uart", "snps,dw-apb-uart";
+		reg = <0x20064000 0x100>;
+		interrupts = <GIC_SPI 21 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru SCLK_UART1>, <&cru PCLK_UART1>;
+		clock-names = "baudclk", "apb_pclk";
+		reg-shift = <2>;
+		reg-io-width = <4>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&uart1_xfer>;
+		status = "disabled";
+	};
+
+	uart2: serial@20068000 {
+		compatible = "rockchip,rk3026-uart", "snps,dw-apb-uart";
+		reg = <0x20068000 0x100>;
+		interrupts = <GIC_SPI 22 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru SCLK_UART2>, <&cru PCLK_UART2>;
+		clock-names = "baudclk", "apb_pclk";
+		reg-shift = <2>;
+		reg-io-width = <4>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&uart2_xfer>;
+		status = "disabled";
+	};
+
+	i2c0: i2c@20072000 {
+		compatible = "rockchip,rk3026-i2c", "rockchip,rk3288-i2c";
+		reg = <0x20072000 0x1000>;
+		interrupts = <GIC_SPI 24 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru PCLK_I2C0>;
+		clock-names = "i2c";
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c0_xfer>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
+
+	i2c1: i2c@20056000 {
+		compatible = "rockchip,rk3026-i2c", "rockchip,rk3288-i2c";
+		reg = <0x20056000 0x1000>;
+		interrupts = <GIC_SPI 25 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru PCLK_I2C1>;
+		clock-names = "i2c";
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c1_xfer>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
+
+	i2c2: i2c@2005a000 {
+		compatible = "rockchip,rk3026-i2c", "rockchip,rk3288-i2c";
+		reg = <0x2005a000 0x1000>;
+		interrupts = <GIC_SPI 26 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru PCLK_I2C2>;
+		clock-names = "i2c";
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c2_xfer>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
+
+	i2c3: i2c@2005e000 {
+		compatible = "rockchip,rk3026-i2c", "rockchip,rk3288-i2c";
+		reg = <0x2005e000 0x1000>;
+		interrupts = <GIC_SPI 27 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru PCLK_I2C3>;
+		clock-names = "i2c";
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c3_xfer>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
+
+	spi: spi@20074000 {
+		compatible = "rockchip,rk3026-spi", "rockchip,rk3066-spi";
+		reg = <0x20074000 0x1000>;
+		interrupts = <GIC_SPI 23 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru SCLK_SPI>, <&cru PCLK_SPI>;
+		clock-names = "spiclk", "apb_pclk";
+		pinctrl-names = "default";
+		pinctrl-0 = <&spi_txd &spi_rxd &spi_clk &spi_cs0>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
+
+	pwm0: pwm@20050000 {
+		compatible = "rockchip,rk3026-pwm", "rockchip,rk2928-pwm";
+		reg = <0x20050000 0x10>;
+		#pwm-cells = <3>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pwm0_pin>;
+		clocks = <&cru PCLK_PWM>;
+		clock-names = "pwm";
+		status = "disabled";
+	};
+
+	pwm1: pwm@20050010 {
+		compatible = "rockchip,rk3026-pwm", "rockchip,rk2928-pwm";
+		reg = <0x20050010 0x10>;
+		#pwm-cells = <3>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pwm1_pin>;
+		clocks = <&cru PCLK_PWM>;
+		clock-names = "pwm";
+		status = "disabled";
+	};
+
+	pwm2: pwm@20050020 {
+		compatible = "rockchip,rk3026-pwm", "rockchip,rk2928-pwm";
+		reg = <0x20050020 0x10>;
+		#pwm-cells = <3>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pwm2_pin>;
+		clocks = <&cru PCLK_PWM>;
+		clock-names = "pwm";
+		status = "disabled";
+	};
+
+	timer@20044000 {
+		compatible = "rockchip,rk3026-timer", "rockchip,rk3288-timer";
+		reg = <0x20044000 0x20>;
+		interrupts = <GIC_SPI 28 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru PCLK_TIMER0>, <&xin24m>;
+		clock-names = "pclk", "timer";
+	};
+
+	/* 0x20034000 is HDMI, not I2S.  I2S sits on the peripheral bus at
+	 * 0x10220000 (live /proc/iomem "rk29_i2s.0"), IRQ 51 = SPI 19.
+	 * No pinctrl: the on-die codec is wired to I2S internally via GRF
+	 * soc_con0 bit 10 (live 0x20008140 = 0x1420), so no pads are used. */
+	i2s: i2s@10220000 {
+		compatible = "rockchip,rk3026-i2s", "rockchip,rk3066-i2s";
+		reg = <0x10220000 0x2000>;
+		interrupts = <GIC_SPI 19 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru SCLK_I2S>, <&cru HCLK_I2S>;
+		clock-names = "i2s_clk", "i2s_hclk";
+		/* PL330 peri[] at 0xc0a51d0c maps request 0 -> dma_ch 4 (I2S TX,
+		 * TXDR 0x10220024) and 1 -> dma_ch 5 (I2S RX, RXDR 0x10220028).
+		 * 4/5 are UART1, which is what the inherited rk3066a numbering hit. */
+		dmas = <&dmac 0>, <&dmac 1>;
+		dma-names = "tx", "rx";
+		#sound-dai-cells = <0>;
+		status = "disabled";
+	};
+
+	codec: codec@20030000 {
+		compatible = "rockchip,rk3026-codec";
+		reg = <0x20030000 0x4000>;
+		clocks = <&cru SCLK_I2S>;
+		clock-names = "mclk";
+		#sound-dai-cells = <0>;
+		status = "disabled";
+	};
+
+	dmac: dma-controller@20078000 {
+		compatible = "arm,pl330", "arm,primecell";
+		reg = <0x20078000 0x4000>;
+		interrupts = <GIC_SPI 0 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 1 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru ACLK_DMAC>;
+		clock-names = "apb_pclk";
+		#dma-cells = <1>;
+		arm,pl330-periph-burst;
+	};
+
+	wdt: watchdog@2004c000 {
+		compatible = "rockchip,rk3026-wdt", "snps,dw-wdt";
+		reg = <0x2004c000 0x100>;
+		clocks = <&cru PCLK_WDT>;
+		interrupts = <GIC_SPI 34 IRQ_TYPE_LEVEL_HIGH>;
+		status = "disabled";
+	};
+
+	saradc: saradc@2006c000 {
+		compatible = "rockchip,rk3026-saradc", "rockchip,rk3399-saradc";
+		reg = <0x2006c000 0x100>;
+		interrupts = <GIC_SPI 17 IRQ_TYPE_LEVEL_HIGH>;
+		#io-channel-cells = <1>;
+		clocks = <&cru SCLK_SARADC>, <&cru PCLK_SARADC>;
+		clock-names = "saradc", "apb_pclk";
+		/*
+		 * No resets property.  rk3026-cru.h numbers SRST_* densely, but
+		 * rockchip_register_softrst() maps id -> (reg = id / 16, bit =
+		 * id % 16), so every id >= 12 names the wrong register AND the
+		 * wrong bit.  SRST_SARADC resolved to CON3 bit 2.  Mis-asserting an
+		 * arbitrary CRU soft reset can be unrecoverable without the
+		 * physical reset pin, so the property is removed until the
+		 * (reg, bit) pairs are proven from a dumped binary.
+		 */
+		status = "disabled";
+	};
+
+	usb_otg: usb@10180000 {
+		compatible = "rockchip,rk3026-usb", "rockchip,rk3066-usb", "snps,dwc2";
+		reg = <0x10180000 0x40000>;
+		interrupts = <GIC_SPI 10 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru HCLK_OTG>;
+		clock-names = "otg";
+		dr_mode = "otg";
+		g-np-tx-fifo-size = <16>;
+		g-rx-fifo-size = <275>;
+		g-tx-fifo-size = <256 128 128 64 64 32>;
+		phys = <&usb_otg_phy>;
+		phy-names = "usb2-phy";
+		status = "disabled";
+	};
+
+	usb_host: usb@101c0000 {
+		compatible = "rockchip,rk3026-usb", "rockchip,rk3066-usb", "snps,dwc2";
+		reg = <0x101c0000 0x40000>;
+		interrupts = <GIC_SPI 11 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru HCLK_HOST>;
+		clock-names = "otg";
+		dr_mode = "host";
+		phys = <&usb_host_phy>;
+		phy-names = "usb2-phy";
+		status = "disabled";
+	};
+
+	sdmmc: mmc@10214000 {
+		compatible = "rockchip,rk3026-dw-mshc", "rockchip,rk3288-dw-mshc";
+		reg = <0x10214000 0x4000>;
+		interrupts = <GIC_SPI 14 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru HCLK_SDMMC>, <&cru SCLK_SDMMC>;
+		clock-names = "biu", "ciu";
+		fifo-depth = <0x100>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sdmmc_clk &sdmmc_cmd &sdmmc_cd &sdmmc_bus4>;
+		status = "disabled";
+	};
+
+	sdio: mmc@10218000 {
+		compatible = "rockchip,rk3026-dw-mshc", "rockchip,rk3288-dw-mshc";
+		reg = <0x10218000 0x4000>;
+		interrupts = <GIC_SPI 15 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru HCLK_SDIO>, <&cru SCLK_SDIO>;
+		clock-names = "biu", "ciu";
+		fifo-depth = <0x100>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sdio_clk &sdio_cmd &sdio_bus4>;
+		status = "disabled";
+	};
+
+	emmc: mmc@1021c000 {
+		compatible = "rockchip,rk3026-dw-mshc", "rockchip,rk3288-dw-mshc";
+		reg = <0x1021c000 0x4000>;
+		interrupts = <GIC_SPI 16 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru HCLK_EMMC>, <&cru SCLK_EMMC>;
+		clock-names = "biu", "ciu";
+		fifo-depth = <0x100>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&emmc_clk &emmc_cmd &emmc_bus8>;
+		status = "disabled";
+	};
+
+	nfc: nand-controller@10500000 {
+		compatible = "rockchip,rk3036-nfc", "rockchip,rk2928-nfc";
+		reg = <0x10500000 0x4000>;
+		interrupts = <GIC_SPI 18 IRQ_TYPE_LEVEL_HIGH>;
+		/*
+		 * RK3026's NAND controller is a single gate off hclk_peri
+		 * (vendor clock_data.c: GATE_CLK(nandc, hclk_periph_pre,
+		 * HCLK_NANDC)) — there is no separate SCLK_NANDC.  The mainline
+		 * driver treats the "nfc" clock as optional and falls back to
+		 * the "ahb" rate, so only "ahb" is supplied here.
+		 */
+		clocks = <&cru HCLK_NANDC>;
+		clock-names = "ahb";
+		/*
+		 * No resets property.  rk3026-cru.h numbers SRST_* densely, but
+		 * rockchip_register_softrst() maps id -> (reg = id / 16, bit =
+		 * id % 16), so every id >= 12 names the wrong register AND the
+		 * wrong bit.  SRST_NANDC resolved to CON2 bit 8.  Mis-asserting an
+		 * arbitrary CRU soft reset can be unrecoverable without the
+		 * physical reset pin, so the property is removed until the
+		 * (reg, bit) pairs are proven from a dumped binary.
+		 */
+		pinctrl-names = "default";
+		pinctrl-0 = <&flash_ale &flash_bus8 &flash_cle &flash_csn0 &flash_wp
+			     &flash_rdn &flash_rdy &flash_wrn>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
+
+	gpu: gpu@10090000 {
+		compatible = "arm,mali-400", "arm,mali-utgard";
+		reg = <0x10090000 0x10000>;
+		interrupts = <GIC_SPI 3 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 4 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 5 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "gp", "gpmmu", "pp";
+		clocks = <&cru ACLK_GPU>;
+		clock-names = "bus";
+		/*
+		 * No resets property.  rk3026-cru.h numbers SRST_* densely, but
+		 * rockchip_register_softrst() maps id -> (reg = id / 16, bit =
+		 * id % 16), so every id >= 12 names the wrong register AND the
+		 * wrong bit.  SRST_GPU resolved to CON4 bit 9.  Mis-asserting an
+		 * arbitrary CRU soft reset can be unrecoverable without the
+		 * physical reset pin, so the property is removed until the
+		 * (reg, bit) pairs are proven from a dumped binary.
+		 */
+		status = "disabled";
+	};
+
+	vop: vop@1010e000 {
+		compatible = "rockchip,rk3026-vop";
+		reg = <0x1010e000 0x2000>;
+		interrupts = <GIC_SPI 9 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru ACLK_LCDC0>, <&cru DCLK_LCDC0>, <&cru HCLK_LCDC0>;
+		clock-names = "aclk_vop", "dclk_vop", "hclk_vop";
+		/*
+		 * No resets property.  rk3026-cru.h numbers SRST_* densely, but
+		 * rockchip_register_softrst() maps id -> (reg = id / 16, bit =
+		 * id % 16), so every id >= 12 names the wrong register AND the
+		 * wrong bit.  SRST_LCDC0_AXI resolved to CON3 bit 9.  Mis-asserting an
+		 * arbitrary CRU soft reset can be unrecoverable without the
+		 * physical reset pin, so the property is removed until the
+		 * (reg, bit) pairs are proven from a dumped binary.
+		 */
+		status = "disabled";
+
+		vop_out: port {
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
+	};
+
+	/* E-Ink Broadcaster (EBC). Base/IRQ from vendor mach-rk2928/io.h
+	 * (RK3026_EBC_PHYS 0x10114000, IRQ_EBC 81 = GIC SPI 49). Clock names
+	 * and the GRF pinmux handle match the reversed vendor hardware_ebc.o:
+	 * it requests hclk_ebc/dclk_ebc/aclk_lcdc1 and sets GRF+0x150 bit0 to
+	 * route the shared pads to EBC instead of LCDC. */
+	ebc: ebc@10114000 {
+		compatible = "rockchip,rk3026-ebc";
+		reg = <0x10114000 0x4000>;
+		interrupts = <GIC_SPI 49 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru HCLK_EBC>, <&cru DCLK_EBC>, <&cru ACLK_LCDC1>;
+		clock-names = "hclk", "dclk", "aclk";
+		rockchip,grf = <&grf>;
+		status = "disabled";
+	};
+
+	pinctrl: pinctrl {
+		compatible = "rockchip,rk3026-pinctrl";
+		rockchip,grf = <&grf>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		gpio0: gpio0@2007c000 {
+			compatible = "rockchip,gpio-bank";
+			reg = <0x2007c000 0x100>;
+			interrupts = <GIC_SPI 36 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&cru PCLK_GPIO0>;
+
+			gpio-controller;
+			#gpio-cells = <2>;
+
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		gpio1: gpio1@20080000 {
+			compatible = "rockchip,gpio-bank";
+			reg = <0x20080000 0x100>;
+			interrupts = <GIC_SPI 37 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&cru PCLK_GPIO1>;
+
+			gpio-controller;
+			#gpio-cells = <2>;
+
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		gpio2: gpio2@20084000 {
+			compatible = "rockchip,gpio-bank";
+			reg = <0x20084000 0x100>;
+			interrupts = <GIC_SPI 38 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&cru PCLK_GPIO2>;
+
+			gpio-controller;
+			#gpio-cells = <2>;
+
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		gpio3: gpio3@20088000 {
+			compatible = "rockchip,gpio-bank";
+			reg = <0x20088000 0x100>;
+			interrupts = <GIC_SPI 39 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&cru PCLK_GPIO3>;
+
+			gpio-controller;
+			#gpio-cells = <2>;
+
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		pcfg_pull_default: pcfg_pull_default {
+			bias-pull-pin-default;
+		};
+
+		pcfg_pull_up: pcfg_pull_up {
+			bias-pull-up;
+		};
+
+		pcfg_pull_down: pcfg_pull_down {
+			bias-pull-down;
+		};
+
+		pcfg_pull_none: pcfg_pull_none {
+			bias-disable;
+		};
+
+		uart0 {
+			/* GPIO0_C0 = UART0_SOUT, GPIO0_C1 = UART0_SIN, FUNC1 */
+			uart0_xfer: uart0-xfer {
+				rockchip,pins = <0 16 1 &pcfg_pull_default>,
+						<0 17 1 &pcfg_pull_default>;
+			};
+		};
+
+		uart1 {
+			/*
+			 * GPIO1_B1 = UART1_SOUT, GPIO1_B2 = UART1_SIN, FUNC2.
+			 * FUNC1 on the same pins is SPI0_TXD/RXD.
+			 */
+			uart1_xfer: uart1-xfer {
+				rockchip,pins = <1 9 2 &pcfg_pull_default>,
+						<1 10 2 &pcfg_pull_default>;
+			};
+		};
+
+		uart2 {
+			/*
+			 * GPIO2_C6 = UART2_SIN, GPIO2_C7 = UART2_SOUT, FUNC3.
+			 * Confirmed live: GRF+0xd0 = 0x0000ff00.  FUNC2 on the
+			 * same pins is LCDC1_D20/D21.
+			 */
+			uart2_xfer: uart2-xfer {
+				rockchip,pins = <2 22 3 &pcfg_pull_default>,
+						<2 23 3 &pcfg_pull_default>;
+			};
+		};
+
+		i2c0 {
+			i2c0_xfer: i2c0-xfer {
+				rockchip,pins = <0 0 1 &pcfg_pull_none>,
+						<0 1 1 &pcfg_pull_none>;
+			};
+		};
+
+		i2c1 {
+			i2c1_xfer: i2c1-xfer {
+				rockchip,pins = <0 2 1 &pcfg_pull_none>,
+						<0 3 1 &pcfg_pull_none>;
+			};
+		};
+
+		i2c2 {
+			/* GPIO2_C4 = I2C2_SDA, GPIO2_C5 = I2C2_SCL, FUNC3 */
+			i2c2_xfer: i2c2-xfer {
+				rockchip,pins = <2 20 3 &pcfg_pull_none>,
+						<2 21 3 &pcfg_pull_none>;
+			};
+		};
+
+		i2c3 {
+			i2c3_xfer: i2c3-xfer {
+				rockchip,pins = <0 6 1 &pcfg_pull_none>,
+						<0 7 1 &pcfg_pull_none>;
+			};
+		};
+
+		spi {
+			/* SPI0: GPIO1_B0 CLK, B1 TXD, B2 RXD, B3 CS0, all FUNC1 */
+			spi_clk: spi-clk {
+				rockchip,pins = <1 8 1 &pcfg_pull_default>;
+			};
+			spi_txd: spi-txd {
+				rockchip,pins = <1 9 1 &pcfg_pull_default>;
+			};
+			spi_rxd: spi-rxd {
+				rockchip,pins = <1 10 1 &pcfg_pull_default>;
+			};
+			spi_cs0: spi-cs0 {
+				rockchip,pins = <1 11 1 &pcfg_pull_default>;
+			};
+		};
+
+		pwm0 {
+			/* GPIO0_D2, FUNC1 */
+			pwm0_pin: pwm0-pin {
+				rockchip,pins = <0 26 1 &pcfg_pull_none>;
+			};
+		};
+
+		pwm1 {
+			/* GPIO0_D3, FUNC1 */
+			pwm1_pin: pwm1-pin {
+				rockchip,pins = <0 27 1 &pcfg_pull_none>;
+			};
+		};
+
+		pwm2 {
+			/* GPIO0_D4, FUNC1 */
+			pwm2_pin: pwm2-pin {
+				rockchip,pins = <0 28 1 &pcfg_pull_none>;
+			};
+		};
+
+		sdmmc {
+			/*
+			 * MMC0 (microSD): GPIO1_B7 CMD, GPIO1_C0 CLKOUT,
+			 * GPIO1_C1 DETN, GPIO1_C2..C5 D0..D3, all FUNC1.
+			 * Note D2/D3 double as JTAG_TCK/TMS when card-detect is
+			 * inactive.
+			 */
+			sdmmc_cmd: sdmmc-cmd {
+				rockchip,pins = <1 15 1 &pcfg_pull_default>;
+			};
+			sdmmc_clk: sdmmc-clk {
+				rockchip,pins = <1 16 1 &pcfg_pull_none>;
+			};
+			sdmmc_cd: sdmmc-cd {
+				rockchip,pins = <1 17 1 &pcfg_pull_default>;
+			};
+			sdmmc_bus4: sdmmc-bus4 {
+				rockchip,pins = <1 18 1 &pcfg_pull_default>,
+						<1 19 1 &pcfg_pull_default>,
+						<1 20 1 &pcfg_pull_default>,
+						<1 21 1 &pcfg_pull_default>;
+			};
+		};
+
+		sdio {
+			/*
+			 * MMC1 (SDIO): GPIO0_B0 CMD, B1 CLKOUT, B2 DETN,
+			 * B3..B6 D0..D3, all FUNC1.
+			 */
+			sdio_cmd: sdio-cmd {
+				rockchip,pins = <0 8 1 &pcfg_pull_default>;
+			};
+			sdio_clk: sdio-clk {
+				rockchip,pins = <0 9 1 &pcfg_pull_none>;
+			};
+			sdio_bus4: sdio-bus4 {
+				rockchip,pins = <0 11 1 &pcfg_pull_default>,
+						<0 12 1 &pcfg_pull_default>,
+						<0 13 1 &pcfg_pull_default>,
+						<0 14 1 &pcfg_pull_default>;
+			};
+		};
+
+		/*
+		 * External I2S pads are unused on this board: live GPIO1A iomux
+		 * (GRF+0xb8) reads 0x0, and GPIO1_A5 (I2S_SDI) is claimed as
+		 * wifi_power.  Vendor iomux.h function map, for reference:
+		 * A0 MCLK, A1 SCLK, A2 LRCKRX, A3 LRCKTX, A4 SDO, A5 SDI.
+		 */
+
+		emmc {
+			/*
+			 * GPIO2_A7 CLKOUT and GPIO1_C6 CMD are the FUNC2
+			 * alternates of NAND_DQS / NAND_CS2 (this board has NAND
+			 * populated, so these groups are mutually exclusive).
+			 */
+			emmc_clk: emmc-clk {
+				rockchip,pins = <2 7 2 &pcfg_pull_none>;
+			};
+			emmc_cmd: emmc-cmd {
+				rockchip,pins = <1 22 2 &pcfg_pull_default>;
+			};
+			emmc_bus8: emmc-bus8 {
+				rockchip,pins = <1 24 2 &pcfg_pull_default>,
+						<1 25 2 &pcfg_pull_default>,
+						<1 26 2 &pcfg_pull_default>,
+						<1 27 2 &pcfg_pull_default>,
+						<1 28 2 &pcfg_pull_default>,
+						<1 29 2 &pcfg_pull_default>,
+						<1 30 2 &pcfg_pull_default>,
+						<1 31 2 &pcfg_pull_default>;
+			};
+		};
+
+		/*
+		 * NAND flash pins.  Identical to rk3036 (same RK2928 die):
+		 * control on GPIO2[A0..A6] FUNC1, data on GPIO1[D0..D7] FUNC1
+		 * (the FUNC2 alternate of the same data pins is eMMC — the two
+		 * are mutually exclusive, which is correct: this board has one
+		 * or the other populated).  Verified against vendor
+		 * iomux-rk2928.h / iomux.c.
+		 */
+		nfc {
+			flash_ale: flash-ale {
+				rockchip,pins = <2 0 1 &pcfg_pull_default>;
+			};
+			flash_cle: flash-cle {
+				rockchip,pins = <2 1 1 &pcfg_pull_default>;
+			};
+			flash_wrn: flash-wrn {
+				rockchip,pins = <2 2 1 &pcfg_pull_default>;
+			};
+			flash_rdn: flash-rdn {
+				rockchip,pins = <2 3 1 &pcfg_pull_default>;
+			};
+			flash_rdy: flash-rdy {
+				rockchip,pins = <2 4 1 &pcfg_pull_default>;
+			};
+			flash_csn0: flash-csn0 {
+				rockchip,pins = <2 6 1 &pcfg_pull_default>;
+			};
+			/* Live GRF GPIO1H = 0xff00: pulls disabled on D0-D7. */
+			/* WP is muxed FUNC1 live and claimed by no driver. */
+			flash_wp: flash-wp {
+				rockchip,pins = <2 5 1 &pcfg_pull_default>;
+			};
+
+			flash_bus8: flash-bus8 {
+				rockchip,pins = <1 24 1 &pcfg_pull_none>,
+						<1 25 1 &pcfg_pull_none>,
+						<1 26 1 &pcfg_pull_none>,
+						<1 27 1 &pcfg_pull_none>,
+						<1 28 1 &pcfg_pull_none>,
+						<1 29 1 &pcfg_pull_none>,
+						<1 30 1 &pcfg_pull_none>,
+						<1 31 1 &pcfg_pull_none>;
+			};
+		};
+	};
+};
