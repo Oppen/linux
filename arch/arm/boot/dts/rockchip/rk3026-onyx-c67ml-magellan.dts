@@ -541,6 +541,18 @@
 	cap-mmc-highspeed;
 	cap-sd-highspeed;
 	card-detect-delay = <200>;
+	/*
+	 * UNPROVEN. dw_mci_get_cd() reads the controller's CDETECT pin
+	 * (dw_mmc.c:898), i.e. MMC0_DETN -- and that pad is measured NOT wired to
+	 * the socket: gpio2 pin 7 is what flips on ejection, gpio1 17 does not
+	 * (2026-07-30).  So Linux sees no card and never creates mmcblk0, while
+	 * U-Boot works anyway because __init_mmc_device() force-inits when
+	 * !mmc_getcd().  broken-cd polls instead of trusting the pin.
+	 *
+	 * cd-gpios = <&gpio2 7 GPIO_ACTIVE_LOW> is the real answer and stays
+	 * blocked on that pad being muxed NAND_DQS.
+	 */
+	broken-cd;
 	disable-wp;
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdmmc_clk &sdmmc_cmd &sdmmc_cd &sdmmc_bus4>;
