@@ -291,19 +291,7 @@
 		 * gpio0 6 is live-muxed I2C3_SCL.  The vendor parks this off, so
 		 * mainline has to assert it.
 		 */
-		/*
-		 * BISECT, 2026-07-31: the gpio property is removed, so this
-		 * regulator registers but drives nothing.
-		 *
-		 * Enabling REGULATOR_FIXED_VOLTAGE gave this node a driver for
-		 * the first time, and the same card stopped reaching userspace
-		 * (the LED, which the previous card had blinking, stayed dark).
-		 * Asserting gpio1 5 is the only new physical action on that
-		 * card, and the pin's identity as wifi_power is inferred from
-		 * vendor board code, not measured.
-		 *
-		 * Restore with:  gpio = <&gpio1 5 GPIO_ACTIVE_LOW>;
-		 */
+		gpio = <&gpio1 5 GPIO_ACTIVE_LOW>;
 		regulator-boot-on;
 		vin-supply = <&vcc_sys>;
 	};
