@@ -291,7 +291,28 @@
 		 * gpio0 6 is live-muxed I2C3_SCL.  The vendor parks this off, so
 		 * mainline has to assert it.
 		 */
-		gpio = <&gpio1 5 GPIO_ACTIVE_LOW>;
+		/*
+		 * NO gpio property, deliberately: this regulator registers and
+		 * drives nothing.
+		 *
+		 * What is evidenced about gpio1 5 (HARDWARE-CONSTANTS §7, live
+		 * /sys/kernel/debug/gpio plus live DR/DDR reads): it is labelled
+		 * "wifi_power" and it is an OUTPUT DRIVEN HIGH under the vendor
+		 * kernel -- gpio1 DDR 0x007d8426 and DR 0x00380026 both have bit
+		 * 5 set.
+		 *
+		 * What is NOT evidenced: that driving it LOW enables anything.
+		 * That came from rk29sdk_wifi_power() in a DIFFERENT board's
+		 * source, which has no standing here.  An earlier revision of
+		 * this node declared GPIO_ACTIVE_LOW on that basis, so the
+		 * fixed-voltage driver would have driven the pin to the opposite
+		 * of its live level.
+		 *
+		 * Settle the polarity by measurement before restoring any gpio
+		 * here.  There is separately no host VBUS GPIO to use instead:
+		 * usb20host_power_enable is a bare "bx lr" and gpio0 6 is
+		 * live-muxed I2C3_SCL.
+		 */
 		regulator-boot-on;
 		vin-supply = <&vcc_sys>;
 	};
