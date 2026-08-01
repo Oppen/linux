@@ -577,7 +577,21 @@
 	disable-wp;
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdmmc_clk &sdmmc_cmd &sdmmc_cd &sdmmc_bus4>;
-	vmmc-supply = <&act_ldo3>;
+	/*
+	 * vmmc-supply = <&act_ldo3> is REMOVED, not forgotten.
+	 *
+	 * Mainline has no act8931 driver: act8865-regulator.c matches only
+	 * act8600, act8846 and act8865, so our "active-semi,act8931" node never
+	 * binds, act_ldo3 never registers, and every consumer of it defers
+	 * forever. dwmmc was one, which is why Linux created no mmcblk0 even
+	 * after REGULATOR_FIXED_VOLTAGE fixed the vqmmc side.
+	 *
+	 * Dropping it is safe: VCC_SD (LDO3) is already on when Linux starts --
+	 * U-Boot's MMC works with no PMIC driver at all -- so nothing here has
+	 * to switch the rail. Linux simply does not control it.
+	 *
+	 * Restore this line once act8931 support exists in the regulator driver.
+	 */
 	vqmmc-supply = <&vcc_io>;
 
 	/*
