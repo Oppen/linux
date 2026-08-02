@@ -44,9 +44,36 @@
 		/* EBC framebuffer + waveform staging.  Live vendor layout
 		 * (dmesg "memory reserve"): 9 MB fb0 buf at 0x7f600000 and
 		 * 1 MB waveform buf at 0x7ff00000, i.e. one 10 MB block. */
+		/*
+		 * compatible is REQUIRED for of_reserved_mem_device_init() to
+		 * find ops for this region. Without it the node is only a
+		 * memblock reservation: the EBC's memory-region phandle
+		 * resolves to a region with no device_init and the driver gets
+		 * -EINVAL -- "no reserved memory region (-22)", observed
+		 * 2026-08-02. shared-dma-pool + no-map is the fixed coherent
+		 * pool a framebuffer wants; "reusable"/CMA is a different thing.
+		 */
 		ebc_reserved: ebc@7f600000 {
+			compatible = "shared-dma-pool";
 			reg = <0x7f600000 0xa00000>;
 			no-map;
+		};
+
+		/*
+		 * Cross-stage log buffer: userspace writes its findings here,
+		 * reboots into U-Boot, and `md`/`strings` read them out. DRAM
+		 * survives the SPL's DDR retraining (measured 2026-08-01), which
+		 * is what makes this work with no MMC and no console.
+		 *
+		 * Deliberately NO no-map. The region must stay in the linear map
+		 * so it counts as System RAM and /dev/mem's write() path accepts
+		 * it; no-map would take it out and dd would be refused. Reserving
+		 * it without no-map still keeps the allocator off it, which is
+		 * the actual requirement -- writing 16 KiB into whatever the
+		 * kernel had allocated there is not survivable.
+		 */
+		boox_log_reserved: boox-log@64000000 {
+			reg = <0x64000000 0x100000>;
 		};
 	};
 
@@ -453,34 +480,61 @@
 	 * wake_up_pin  = RK30_PIN3_PC1 = GPIO3 pin 17
 	 * vcom_ctl_pin = RK30_PIN2_PC0 = GPIO2 pin 16
 	 */
-	tps65185: tps65185@68 {
+	/*
+	 * Written against the UPSTREAM binding, ti,tps65185.yaml, and driven by
+	 * drivers/regulator/tps65185.c.  An earlier revision described a
+	 * single "epd" rail, which matched a local MFD driver that has since
+	 * been deleted for duplicating (and colliding with) the upstream one.
+	 *
+	 * No enable-gpios: the vendor platform data sets pwr_up_pin =
+	 * INVALID_GPIO, so PWRUP is not brought out and the driver uses the
+	 * ENABLE register instead.
+	 *
+	 * No pwr-good-gpios either -- see the note in BLOCKERS: whether PGOOD
+	 * reaches a SoC pin on this board is UNKNOWN, not established.  The
+	 * driver treats it as optional and falls back to the PG register.  If
+	 * a continuity check ever finds the net, adding the property here is
+	 * strictly better than the I2C poll.
+	 */
+	tps65185: pmic@68 {
 		compatible = "ti,tps65185";
 		reg = <0x68>;
-		/* Per-unit value, NOT the -2500 generic default.  Two independent
-		 * live sources: onyx_misc vcom_value = 180 (centivolts) and dmesg
-		 * "tps65185_vcom_get: read_vcom_mv = 180".  Register LSB is 10mV.
-		 * Re-read from the panel if this DTS is used on another unit. */
-		vcom-voltage-mv = <1800>;
-		wake-up-gpios = <&gpio3 17 GPIO_ACTIVE_HIGH>;
+		vin-supply = <&vcc_io>;
+		wakeup-gpios = <&gpio3 17 GPIO_ACTIVE_HIGH>;
 		vcom-ctrl-gpios = <&gpio2 16 GPIO_ACTIVE_HIGH>;
-		vcc-supply = <&vcc_io>;
-		/* On-die thermometer; the waveform buckets by panel temperature. */
-		#thermal-sensor-cells = <0>;
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&tps65185_pins>;
 		status = "okay";
 
-		/*
-		 * The EPD rails come up as one group: the driver writes ENABLE
-		 * and the chip sequences them from UPSEQ/DWNSEQ.  VADJ and the
-		 * UPSEQ/DWNSEQ registers are left at their EEPROM defaults --
-		 * the vendor programs them but the values were never recovered.
-		 */
 		regulators {
-			epd_rails: epd {
-				regulator-name = "epd-rails";
-				regulator-boot-off;
+			v3p3_reg: v3p3 {
+				regulator-name = "v3p3";
+			};
+
+			/*
+			 * 15.00 V selects VADJ = 0x03, which is the value read
+			 * off this unit's own chip (HARDWARE-CONSTANTS 10b).
+			 * The driver inverts the selector, so 15.00 V is
+			 * list index 3 and lands on register value 3.
+			 */
+			vposneg_reg: vposneg {
+				regulator-name = "vposneg";
+				regulator-min-microvolt = <15000000>;
+				regulator-max-microvolt = <15000000>;
+			};
+
+			/*
+			 * Magnitude, not sign: the rail is -1.8 V.  Per-unit
+			 * value, NOT the -2500 generic default -- two live
+			 * sources agree (onyx_misc vcom_value = 180 centivolts
+			 * and the vendor's own "read_vcom_mv = 180").  Re-read
+			 * from the panel before using this DTS on another unit.
+			 */
+			vcom_reg: vcom {
+				regulator-name = "vcom";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
 			};
 		};
 	};
@@ -640,7 +694,8 @@
 &ebc {
 	status = "okay";
 	memory-region = <&ebc_reserved>;
-	epd-supply = <&epd_rails>;
+	/* vposneg is the sequenced high-voltage rail the panel needs. */
+	epd-supply = <&vposneg_reg>;
 
 	/* E Ink ED060XC3T1, 6.0" 1024x758.  Panel ID read live from this unit's
 	 * own waveform container ("_C172_WR4601_ED060XC3T1_TC").
@@ -810,20 +865,25 @@
 	};
 };
 
-/ {
-	/*
-	 * Panel thermometer inside the EPD PMIC.  The EBC driver looks this
-	 * zone up by name and reads it before every refresh: the waveform
-	 * container has one lookup table per temperature bucket.
-	 */
-	thermal-zones {
-		epd_thermal: epd-thermal {
-			polling-delay = <0>;
-			polling-delay-passive = <0>;
-			thermal-sensors = <&tps65185>;
-
-			trips {
-			};
-		};
-	};
-};
+/*
+ * Panel thermometer: NO thermal-zones node, deliberately.
+ *
+ * The EBC driver looks up a zone named "epd-thermal" and reads it before every
+ * refresh, because the waveform container has one lookup table per temperature
+ * bucket.  That zone used to be declared here with thermal-sensors =
+ * <&tps65185>, which worked against the local MFD driver that has since been
+ * deleted.  The upstream driver exposes the on-die thermometer through HWMON
+ * instead (HWMON_CHANNEL_INFO with HWMON_C_REGISTER_TZ), and does not register
+ * itself as a DT thermal sensor -- so a thermal-sensors phandle to it does not
+ * resolve, and the node would not even compile now that #thermal-sensor-cells
+ * is gone.
+ *
+ * Dropping it is safe for bring-up: thermal_zone_get_zone_by_name() failing is
+ * non-fatal in the EBC driver, which warns and falls back to a default
+ * temperature.  The waveform is then picked from the wrong bucket, which
+ * affects image quality, not safety.
+ *
+ * TODO before the panel is used in anger: have the EBC read the hwmon channel
+ * directly, or register a thermal zone from the hwmon device.  Do NOT restore
+ * the old node -- it describes a driver that no longer exists.
+ */
