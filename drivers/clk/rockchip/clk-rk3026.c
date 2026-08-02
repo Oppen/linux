@@ -394,7 +394,17 @@ static struct rockchip_clk_branch rk3026_clk_branches[] __initdata = {
 	COMPOSITE(0, "aclk_lcdc1_src", mux_pll_src_cpll_gpll_p, 0,
 			RK2928_CLKSEL_CON(31), 15, 1, MFLAGS, 8, 5, DFLAGS,
 			RK2928_CLKGATE_CON(1), 4, GFLAGS),
-	GATE(ACLK_LCDC1, "aclk_lcdc1", "aclk_lcdc1_src", 0,
+	/*
+	 * The video NIU sits between the source and aclk_lcdc1, and the EBC is
+	 * what borrows that clock. Omitting it left the AXI path to DRAM gated:
+	 * GFLAGS is SET_TO_DISABLE, so a gate nothing models is a gate nothing
+	 * ever opens. Chain and gate_idx from the running kernel's own clk table
+	 * (docs/re/CRU-GATES.md): aclk_lcdc1[CON9.b6] <- aclk_vio1_niu[CON9.b10]
+	 * <- aclk_lcdc1_pre[CON1.b4].
+	 */
+	GATE(0, "aclk_vio1_niu", "aclk_lcdc1_src", 0,
+			RK2928_CLKGATE_CON(9), 10, GFLAGS),
+	GATE(ACLK_LCDC1, "aclk_lcdc1", "aclk_vio1_niu", 0,
 			RK2928_CLKGATE_CON(9), 6, GFLAGS),
 	GATE(HCLK_LCDC1, "hclk_lcdc1", "hclk_peri_src", 0,
 			RK2928_CLKGATE_CON(9), 5, GFLAGS),
