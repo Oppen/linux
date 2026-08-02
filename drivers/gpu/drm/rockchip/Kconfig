@@ -155,6 +155,12 @@ config DRM_RK3026_EBC
 	depends on DRM
 	depends on ARCH_ROCKCHIP || COMPILE_TEST
 	depends on OF
+	# The waveform LUT is selected by panel temperature, so the thermal
+	# zone is a real dependency, not an optional extra: without it every
+	# update silently uses the 25 C bucket and under- or over-drives the
+	# pigment. Declared rather than gated -- the whole port ran that way
+	# unnoticed behind a dev_warn.
+	depends on THERMAL_OF
 	select DRM_CLIENT_SELECTION
 	select DRM_GEM_SHMEM_HELPER
 	select DRM_KMS_HELPER
