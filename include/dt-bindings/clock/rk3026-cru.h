@@ -166,8 +166,11 @@
 #define SCLK_EMMC_DRV		84
 #define SCLK_EMMC_SAMPLE	85
 
+/* Display AXI source, exposed so the board can pin its parent and rate. */
+#define ACLK_LCDC1_SRC		86
+
 /* Number of clocks */
-#define CLK_NR_CLKS		(SCLK_EMMC_SAMPLE + 1)
+#define CLK_NR_CLKS		(ACLK_LCDC1_SRC + 1)
 
 /*
  * Soft Resets

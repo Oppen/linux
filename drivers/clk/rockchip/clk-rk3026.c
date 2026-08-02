@@ -391,7 +391,7 @@ static struct rockchip_clk_branch rk3026_clk_branches[] __initdata = {
 	 * dclk_lcdc1: CLKSEL_CON(28), bit0=mux (0=cpll,1=gpll), bits[15:8]=div
 	 *              gate=CLK_GATE_DCLK_LCDC1_SRC (CON3 bit2)
 	 */
-	COMPOSITE(0, "aclk_lcdc1_src", mux_pll_src_cpll_gpll_p, 0,
+	COMPOSITE(ACLK_LCDC1_SRC, "aclk_lcdc1_src", mux_pll_src_cpll_gpll_p, 0,
 			RK2928_CLKSEL_CON(31), 15, 1, MFLAGS, 8, 5, DFLAGS,
 			RK2928_CLKGATE_CON(1), 4, GFLAGS),
 	/*
