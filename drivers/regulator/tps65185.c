@@ -5,6 +5,7 @@
 
 #include <linux/cleanup.h>
 #include <linux/completion.h>
+#include <linux/delay.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
@@ -29,6 +30,8 @@
 #define TPS65185_REG_TMST1 0xd
 #define TPS65185_REG_TMST2 0xe
 #define TPS65185_REG_PG 0xf
+/* PG bits for the rails; vendor papyrus_hw_power_ack() masks with this. */
+#define TPS65185_PG_ALL 0xfa
 #define TPS65185_REG_REVID 0x10
 
 #define TPS65185_READ_THERM BIT(7)
@@ -109,6 +112,11 @@ static bool tps65185_volatile_reg(struct device *dev, unsigned int reg)
 	case TPS65185_REG_INT1:
 	case TPS65185_REG_INT2:
 	case TPS65185_REG_TMST1:
+	/*
+	 * PG must be volatile: with no PGOOD pin it is polled to decide when
+	 * the rails have come up, and a cached value never changes.
+	 */
+	case TPS65185_REG_PG:
 		return true;
 	default:
 		return false;
@@ -130,11 +138,43 @@ static const struct regulator_ops tps65185_v3p3ops = {
 	.is_enabled = regulator_is_enabled_regmap,
 };
 
+/*
+ * Power-good, from the pin when the board routes it and from the chip when it
+ * does not.
+ *
+ * PG (0x0f) reports each rail separately. Per SLVSAQ8G Table 18 bits 2 and 0
+ * are "Not used", so the used-bit mask is 0xfa -- which is exactly the constant
+ * the shipped vendor driver arrived at independently (papyrus_hw_power_ack()
+ * masks with 0xfa and treats 0xfa as all-up, 0x00 as all-down, anything else as
+ * not yet settled).
+ *
+ * NB this is STRICTER than the pin. The datasheet notes the PG pin goes HiZ
+ * when VDDH_PG = VPOS_PG = VEE_PG = VNEG_PG, i.e. four bits, whereas the
+ * register also carries VB_PG (boost) and VN_PG (inverting buck-boost). A board
+ * without the pin therefore waits for two more rails to be in regulation than a
+ * board with it. That is the safer direction, but it is a real difference in
+ * behaviour between the two paths, not an equivalence.
+ */
+static int tps65185_pgood(struct tps65185_data *data)
+{
+	unsigned int pg;
+	int ret;
+
+	if (data->pgood_gpio)
+		return gpiod_get_value_cansleep(data->pgood_gpio);
+
+	ret = regmap_read(data->regmap, TPS65185_REG_PG, &pg);
+	if (ret)
+		return ret;
+
+	return (pg & TPS65185_PG_ALL) == TPS65185_PG_ALL;
+}
+
 static int tps65185_check_powergood(struct regulator_dev *rdev)
 {
 	struct tps65185_data *data = rdev_get_drvdata(rdev);
 
-	return gpiod_get_value_cansleep(data->pgood_gpio);
+	return tps65185_pgood(data);
 }
 
 static int tps65185_vposneg_get_voltage_sel(struct regulator_dev *rdev)
@@ -180,10 +220,26 @@ static int tps65185_vposneg_enable(struct regulator_dev *rdev)
 		return ret;
 
 	dev_dbg(data->dev, "turning on...");
-	wait_for_completion_timeout(&data->pgood_completion,
-				    msecs_to_jiffies(PGOOD_TIMEOUT_MSECS));
+	if (data->pgood_gpio) {
+		wait_for_completion_timeout(&data->pgood_completion,
+					    msecs_to_jiffies(PGOOD_TIMEOUT_MSECS));
+	} else {
+		/*
+		 * No edge to wait on, so poll the chip. The vendor driver uses
+		 * 10 tries at 10 ms; keep the same overall budget as the
+		 * interrupt path so a slow rail behaves identically.
+		 */
+		unsigned long timeout = jiffies +
+					msecs_to_jiffies(PGOOD_TIMEOUT_MSECS);
+
+		do {
+			if (tps65185_pgood(data) == 1)
+				break;
+			usleep_range(9000, 11000);
+		} while (time_before(jiffies, timeout));
+	}
 	dev_dbg(data->dev, "turned on");
-	if (gpiod_get_value_cansleep(data->pgood_gpio) != 1)
+	if (tps65185_pgood(data) != 1)
 		return -ETIMEDOUT;
 
 	return 0;
@@ -340,15 +396,25 @@ static int tps65185_probe(struct i2c_client *client)
 		return dev_err_probe(&client->dev, PTR_ERR(data->regmap),
 				     "failed to allocate regmap!\n");
 
-	data->pgood_gpio = devm_gpiod_get(&client->dev, "pwr-good", GPIOD_IN);
+	/*
+	 * Optional: not every board routes PGOOD to a GPIO. The C67ML brings it
+	 * out only to a probe pad, and the vendor platform data has no such pin
+	 * at all. Without it, power-good is read from the PG register instead --
+	 * see tps65185_pgood().
+	 */
+	data->pgood_gpio = devm_gpiod_get_optional(&client->dev, "pwr-good",
+						   GPIOD_IN);
 	if (IS_ERR(data->pgood_gpio))
 		return dev_err_probe(&client->dev,
 				     PTR_ERR(data->pgood_gpio),
 				     "failed to get power good gpio\n");
 
-	data->pgood_irq = gpiod_to_irq(data->pgood_gpio);
-	if (data->pgood_irq < 0)
-		return data->pgood_irq;
+	data->pgood_irq = -1;
+	if (data->pgood_gpio) {
+		data->pgood_irq = gpiod_to_irq(data->pgood_gpio);
+		if (data->pgood_irq < 0)
+			return data->pgood_irq;
+	}
 
 	data->pwrup_gpio = devm_gpiod_get_optional(&client->dev, "enable", GPIOD_OUT_LOW);
 	if (IS_ERR(data->pwrup_gpio))
@@ -360,6 +426,14 @@ static int tps65185_probe(struct i2c_client *client)
 		return dev_err_probe(&client->dev,
 				     PTR_ERR(data->wakeup_gpio),
 				     "failed to get wakeup gpio\n");
+
+	/*
+	 * SLVSAQ8G Figure 2: 1.8 ms minimum from the WAKEUP rising edge to the
+	 * IC accepting an I2C transaction. Nothing between here and the first
+	 * transfer is guaranteed to take that long, so wait explicitly.
+	 */
+	if (data->wakeup_gpio)
+		usleep_range(2000, 3000);
 
 	data->vcom_ctrl_gpio = devm_gpiod_get_optional(&client->dev, "vcom-ctrl", GPIOD_OUT_LOW);
 	if (IS_ERR(data->vcom_ctrl_gpio))
@@ -378,13 +452,15 @@ static int tps65185_probe(struct i2c_client *client)
 	init_completion(&data->pgood_completion);
 	init_completion(&data->tmst_completion);
 
-	ret = devm_request_threaded_irq(&client->dev, data->pgood_irq, NULL,
-					pgood_handler,
-					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
-					"PGOOD", data);
-	if (ret)
-		return dev_err_probe(&client->dev, ret,
-				     "failed to request power good irq\n");
+	if (data->pgood_gpio) {
+		ret = devm_request_threaded_irq(&client->dev, data->pgood_irq,
+						NULL, pgood_handler,
+						IRQF_TRIGGER_RISING | IRQF_ONESHOT,
+						"PGOOD", data);
+		if (ret)
+			return dev_err_probe(&client->dev, ret,
+					     "failed to request power good irq\n");
+	}
 
 	if (client->irq) {
 		ret = devm_request_threaded_irq(&client->dev, client->irq,
