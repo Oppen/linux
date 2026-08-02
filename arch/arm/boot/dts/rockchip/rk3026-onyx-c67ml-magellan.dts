@@ -503,6 +503,14 @@
 		wakeup-gpios = <&gpio3 17 GPIO_ACTIVE_HIGH>;
 		vcom-ctrl-gpios = <&gpio2 16 GPIO_ACTIVE_HIGH>;
 
+		/*
+		 * The panel thermometer. Consumed through the hwmon->thermal
+		 * bridge: the driver registers with HWMON_C_REGISTER_TZ, hwmon
+		 * calls devm_thermal_of_zone_register(), and that needs a zone
+		 * in the DT pointing here -- see /thermal-zones/epd-thermal.
+		 */
+		#thermal-sensor-cells = <0>;
+
 		pinctrl-names = "default";
 		pinctrl-0 = <&tps65185_pins>;
 		status = "okay";
@@ -866,24 +874,34 @@
 };
 
 /*
- * Panel thermometer: NO thermal-zones node, deliberately.
+ * Panel thermometer, reached through the hwmon->thermal bridge.
  *
- * The EBC driver looks up a zone named "epd-thermal" and reads it before every
- * refresh, because the waveform container has one lookup table per temperature
- * bucket.  That zone used to be declared here with thermal-sensors =
- * <&tps65185>, which worked against the local MFD driver that has since been
- * deleted.  The upstream driver exposes the on-die thermometer through HWMON
- * instead (HWMON_CHANNEL_INFO with HWMON_C_REGISTER_TZ), and does not register
- * itself as a DT thermal sensor -- so a thermal-sensors phandle to it does not
- * resolve, and the node would not even compile now that #thermal-sensor-cells
- * is gone.
+ * The EBC reads a zone named "epd-thermal" before every refresh: the waveform
+ * container carries one LUT per temperature bucket, so a wrong reading under-
+ * or over-drives the pigment.
  *
- * Dropping it is safe for bring-up: thermal_zone_get_zone_by_name() failing is
- * non-fatal in the EBC driver, which warns and falls back to a default
- * temperature.  The waveform is then picked from the wrong bucket, which
- * affects image quality, not safety.
+ * An earlier revision deleted this node, arguing that the upstream tps65185
+ * exposes the thermometer via HWMON and "does not register itself as a DT
+ * thermal sensor -- so a thermal-sensors phandle to it does not resolve".
+ * That is WRONG, and it is why the port ran its whole life on the 25 C bucket.
+ * The driver registers with HWMON_C_REGISTER_TZ, and hwmon.c:243 then calls
+ * devm_thermal_of_zone_register() on its behalf; the observed message
  *
- * TODO before the panel is used in anger: have the EBC read the hwmon channel
- * directly, or register a thermal zone from the hwmon device.  Do NOT restore
- * the old node -- it describes a driver that no longer exists.
+ *     hwmon hwmon0: temp1_input not attached to any thermal zone
+ *
+ * is the -ENODEV path at hwmon.c:248 -- the bridge ran and found no DT zone
+ * pointing at the sensor. Supplying one is the whole fix; no driver change is
+ * needed. Gated only on IS_ENABLED(CONFIG_THERMAL_OF), which we have.
+ *
+ * No trips and no polling: the EBC calls thermal_zone_get_temp() on demand,
+ * and there is nothing to cool.
  */
+/ {
+	thermal-zones {
+		epd-thermal {
+			polling-delay = <0>;
+			polling-delay-passive = <0>;
+			thermal-sensors = <&tps65185>;
+		};
+	};
+};
