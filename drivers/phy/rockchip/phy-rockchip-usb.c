@@ -310,10 +310,22 @@ err_clk:
 	return err;
 }
 
+/*
+ * The pll_name here is the name this driver REGISTERS for the PHY's 480 MHz
+ * output, not a clock it looks up -- so it must not collide with anything the
+ * CRU already registers. clk-rk3026.c has gates called "sclk_otgphy0" and
+ * "sclk_otgphy1" (as mainline's rk3036 and rk3128 CRUs do), so naming the PLLs
+ * the same made clk_hw_register() return -EEXIST and the phy probe fail with
+ * -17. Both USB nodes then deferred forever and no UDC ever appeared -- the
+ * long-standing "adbd is silent and a replug does not help" symptom.
+ *
+ * Every other pdata in this file uses the _480m suffix for exactly this
+ * reason; rk3026 was added here without it.
+ */
 static const struct rockchip_usb_phy_pdata rk3026_pdata = {
 	.phys = (struct rockchip_usb_phys[]){
-		{ .reg = 0x17c, .pll_name = "sclk_otgphy0" }, /* GRF_UOC0_CON0 */
-		{ .reg = 0x190, .pll_name = "sclk_otgphy1" }, /* GRF_UOC1_CON0 */
+		{ .reg = 0x17c, .pll_name = "sclk_otgphy0_480m" }, /* GRF_UOC0_CON0 */
+		{ .reg = 0x190, .pll_name = "sclk_otgphy1_480m" }, /* GRF_UOC1_CON0 */
 		{ /* sentinel */ }
 	},
 };
