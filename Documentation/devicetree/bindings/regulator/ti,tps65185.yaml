@@ -27,6 +27,10 @@ properties:
     maxItems: 1
 
   pwr-good-gpios:
+    description:
+      PGOOD pin. Optional - not every board routes it. When absent the driver
+      reads the PG register (0x0F) over I2C instead. Note the register is
+      stricter than the pin, which reflects only VDDH/VPOS/VEE/VNEG.
     maxItems: 1
 
   vcom-ctrl-gpios:
@@ -52,7 +56,6 @@ properties:
 required:
   - compatible
   - reg
-  - pwr-good-gpios
   - vin-supply
 
 additionalProperties: false
