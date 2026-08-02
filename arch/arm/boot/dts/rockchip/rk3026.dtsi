@@ -231,7 +231,12 @@
 	};
 
 	i2c0: i2c@20072000 {
-		compatible = "rockchip,rk3026-i2c", "rockchip,rk3288-i2c";
+		/* Not rk3288-i2c: that variant declares no GRF mode select, and
+		 * RK3026 needs one. soc_con1 bit 11+n picks RKI2C over the legacy
+		 * DW-I2C block, no bootloader stage sets it, and a warm reset
+		 * wipes GRF -- so the fallback binds and then never transfers. */
+		compatible = "rockchip,rk3026-i2c";
+		rockchip,grf = <&grf>;
 		reg = <0x20072000 0x1000>;
 		interrupts = <GIC_SPI 24 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&cru PCLK_I2C0>;
@@ -244,7 +249,12 @@
 	};
 
 	i2c1: i2c@20056000 {
-		compatible = "rockchip,rk3026-i2c", "rockchip,rk3288-i2c";
+		/* Not rk3288-i2c: that variant declares no GRF mode select, and
+		 * RK3026 needs one. soc_con1 bit 11+n picks RKI2C over the legacy
+		 * DW-I2C block, no bootloader stage sets it, and a warm reset
+		 * wipes GRF -- so the fallback binds and then never transfers. */
+		compatible = "rockchip,rk3026-i2c";
+		rockchip,grf = <&grf>;
 		reg = <0x20056000 0x1000>;
 		interrupts = <GIC_SPI 25 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&cru PCLK_I2C1>;
@@ -257,7 +267,12 @@
 	};
 
 	i2c2: i2c@2005a000 {
-		compatible = "rockchip,rk3026-i2c", "rockchip,rk3288-i2c";
+		/* Not rk3288-i2c: that variant declares no GRF mode select, and
+		 * RK3026 needs one. soc_con1 bit 11+n picks RKI2C over the legacy
+		 * DW-I2C block, no bootloader stage sets it, and a warm reset
+		 * wipes GRF -- so the fallback binds and then never transfers. */
+		compatible = "rockchip,rk3026-i2c";
+		rockchip,grf = <&grf>;
 		reg = <0x2005a000 0x1000>;
 		interrupts = <GIC_SPI 26 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&cru PCLK_I2C2>;
@@ -270,7 +285,12 @@
 	};
 
 	i2c3: i2c@2005e000 {
-		compatible = "rockchip,rk3026-i2c", "rockchip,rk3288-i2c";
+		/* Not rk3288-i2c: that variant declares no GRF mode select, and
+		 * RK3026 needs one. soc_con1 bit 11+n picks RKI2C over the legacy
+		 * DW-I2C block, no bootloader stage sets it, and a warm reset
+		 * wipes GRF -- so the fallback binds and then never transfers. */
+		compatible = "rockchip,rk3026-i2c";
+		rockchip,grf = <&grf>;
 		reg = <0x2005e000 0x1000>;
 		interrupts = <GIC_SPI 27 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&cru PCLK_I2C3>;

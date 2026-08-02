@@ -1185,6 +1185,11 @@ static const struct rk3x_i2c_soc_data rk3188_soc_data = {
 	.calc_timings = rk3x_i2c_v0_calc_timings,
 };
 
+static const struct rk3x_i2c_soc_data rk3026_soc_data = {
+	.grf_offset = 0x144,
+	.calc_timings = rk3x_i2c_v0_calc_timings,
+};
+
 static const struct rk3x_i2c_soc_data rk3228_soc_data = {
 	.grf_offset = -1,
 	.calc_timings = rk3x_i2c_v0_calc_timings,
@@ -1216,6 +1221,10 @@ static const struct of_device_id rk3x_i2c_match[] = {
 	{
 		.compatible = "rockchip,rk3188-i2c",
 		.data = &rk3188_soc_data
+	},
+	{
+		.compatible = "rockchip,rk3026-i2c",
+		.data = &rk3026_soc_data
 	},
 	{
 		.compatible = "rockchip,rk3228-i2c",
