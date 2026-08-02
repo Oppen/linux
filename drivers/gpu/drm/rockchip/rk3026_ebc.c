@@ -55,7 +55,10 @@
 #define DRIVER_NAME		"rk3026-ebc"
 #define EBC_WAVEFORM_FW		"rockchip/rk3026-c67ml.rkf"
 /* A cold GC16 waveform is ~130 frames at 85 Hz; the vendor arms 3 s. */
-#define EBC_FRAME_TIMEOUT_MS	3000
+/* DIAGNOSTIC, REVERT ME: was 3000. Splits "the frame never completes" from
+ * "the frame is too slow for the budget" -- aclk_lcdc1 is 24 MHz off a
+ * bypassed CPLL, and dclk_ebc landed on 66 MHz instead of the intended 80. */
+#define EBC_FRAME_TIMEOUT_MS	60000
 /* Longest a client may block in MXCFB_WAIT_FOR_UPDATE_COMPLETE. */
 #define EBC_MARKER_TIMEOUT_MS	10000
 
