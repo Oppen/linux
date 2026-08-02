@@ -109,11 +109,36 @@
 		      <0x1013c100 0x100>;
 	};
 
+	/*
+	 * DISABLED ON PURPOSE, exactly as mainline does for the other Rockchip
+	 * Cortex-A9 parts (rk3xxx.dtsi): the clocksource and sched_clock the
+	 * arm_global_timer provides are unstable here because its rate follows
+	 * the CPU frequency. Keeping it off lets ROCKCHIP_TIMER be selected
+	 * instead, which is what we want and what already runs (rk_timer).
+	 *
+	 * Left enabled, it produced:
+	 *     ARM Global timer register failed (-22)
+	 *     Failed to initialize '/timer@1013c200': -22
+	 * because clk-rk3026.c registers the CLKSEL_CON(1)[3:0] core-periph
+	 * divider with id 0 rather than CORE_PERI, so of_clk_get() finds
+	 * nothing and arm_global_timer bails with -EINVAL.
+	 *
+	 * ⚠️ Do NOT "fix" that by exporting CORE_PERI from the clock driver.
+	 * That makes the global timer register SUCCESSFULLY and become the
+	 * clocksource -- the precise failure mainline's comment warns about,
+	 * and it gets worse once cpufreq-dt works and armclk actually moves.
+	 * The error message is the symptom; the enabled node is the bug.
+	 *
+	 * U-Boot is a different case and legitimately uses this timer: it has
+	 * no cpufreq, sets APLL once, and its clk driver does implement
+	 * CORE_PERI (measured 100.0139 MHz vs APLL/6).
+	 */
 	global_timer: timer@1013c200 {
 		compatible = "arm,cortex-a9-global-timer";
 		reg = <0x1013c200 0x20>;
 		interrupts = <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(2) | IRQ_TYPE_LEVEL_HIGH)>;
 		clocks = <&cru CORE_PERI>;
+		status = "disabled";
 	};
 
 	local_timer: timer@1013c600 {
