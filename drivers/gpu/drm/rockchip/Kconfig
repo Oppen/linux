@@ -149,3 +149,37 @@ config ROCKCHIP_RK3066_HDMI
 	  for the RK3066 HDMI driver. If you want to enable
 	  HDMI on RK3066 based SoC, you should select this option.
 endif
+
+config DRM_RK3026_EBC
+	tristate "DRM Support for the RK3026 EBC (E Ink)"
+	depends on DRM
+	depends on ARCH_ROCKCHIP || COMPILE_TEST
+	depends on OF
+	select DRM_CLIENT_SELECTION
+	select DRM_GEM_SHMEM_HELPER
+	select DRM_KMS_HELPER
+	select MFD_SYSCON
+	select VIDEOMODE_HELPERS
+	help
+	  DRM driver for the RK3026 EBC (E-Ink Broadcaster), the E Ink
+	  controller in the ONYX BOOX C67ML and its rebrands: a 6.0"
+	  1024x758 four-bit greyscale panel. Refreshes run on a dedicated
+	  kthread and are driven by framebuffer damage.
+
+	  The waveform lookup tables are loaded from a Rockchip "rkf"
+	  container in /lib/firmware; without one the panel stays blank.
+
+	  This driver is also available as a module called rk3026-ebc.
+
+config DRM_RK3026_EBC_MXCFB
+	bool "mxcfb ioctl compatibility for the RK3026 EBC"
+	depends on DRM_RK3026_EBC
+	depends on DRM_FBDEV_EMULATION
+	default y
+	help
+	  Add the i.MX EPDC ("mxcfb") MXCFB_SEND_UPDATE and
+	  MXCFB_WAIT_FOR_UPDATE_COMPLETE ioctls to the emulated fbdev, so
+	  e-reader userspace can pick a waveform mode, supply a panel
+	  temperature and wait for a refresh to finish. This is not an
+	  upstream interface; without it the display degrades to
+	  single-mode partial refresh rather than breaking.

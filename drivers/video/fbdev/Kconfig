@@ -1812,24 +1812,6 @@ config FB_SM712
 	  called sm712fb. If you want to compile it as a module, say M
 	  here and read <file:Documentation/kbuild/modules.rst>.
 
-config FB_RK3026_EBC
-	tristate "Rockchip RK3026 EBC (E Ink) framebuffer support"
-	depends on FB && (ARCH_ROCKCHIP || COMPILE_TEST)
-	depends on OF
-	select FB_SYS_FILLRECT
-	select FB_SYS_COPYAREA
-	select FB_SYS_IMAGEBLIT
-	select FB_SYS_FOPS
-	select FB_DEFERRED_IO
-	select MFD_SYSCON
-	help
-	  Framebuffer driver for the RK3026 EBC (E-Ink Broadcaster) found on
-	  ONYX BOOX C67ML and e601/e602 e-readers (6.0" 1024x758 E Ink panel).
-	  Exposes an 8bpp grayscale /dev/fbN with deferred-IO refresh. The
-	  waveform LUT is loaded from rockchip/rk3026-c67ml.wbf.
-
-	  This driver is also available as a module called rk3026_ebc.
-
 source "drivers/video/fbdev/omap/Kconfig"
 source "drivers/video/fbdev/omap2/Kconfig"
 source "drivers/video/fbdev/mmp/Kconfig"

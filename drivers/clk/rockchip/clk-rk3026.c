@@ -12,8 +12,10 @@
 
 #include <linux/clk-provider.h>
 #include <linux/io.h>
+#include <linux/notifier.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/reboot.h>
 #include <linux/syscore_ops.h>
 #include <dt-bindings/clock/rk3026-cru.h>
 #include "clk.h"
@@ -72,12 +74,31 @@ static struct rockchip_pll_rate_table rk3026_pll_rates[] = {
 };
 
 /*
- * GPLL/CPLL fixed-rate tables.
- * gpll = 768 MHz, cpll = 594 MHz (from vendor clock_data.c).
+ * GPLL rate table. Both entries match the vendor's gpll_clks at 0xc08af258.
  */
 static struct rockchip_pll_rate_table rk3026_gpll_clks[] = {
 	RK3036_PLL_RATE(768000000, 1, 32, 1, 1, 1, 0),
 	RK3036_PLL_RATE(297000000, 2, 99, 4, 1, 1, 0),
+	{ /* sentinel */ },
+};
+
+/*
+ * CPLL rate table, from the vendor's cpll_clks at 0xc08af280 (798/594/1064),
+ * plus 560 MHz which is what this device actually runs.
+ *
+ * 560 is not in the vendor table because the vendor does not use a table here:
+ * dclk_ebc's set_rate op (clksel_set_ebc_rate_freediv, 0xc0456cc4) picks a
+ * divider from the requested rate -- 7 for anything <= 80 MHz -- then sweeps a
+ * candidate CPLL rate from 700 MHz down to 400 MHz in 10 kHz steps until
+ * cand/div matches, and sets CPLL to it. 80 MHz x 7 = 560 MHz, which is the
+ * live CPLL rate. Binding CPLL to the GPLL table, as an earlier revision did,
+ * would move it somewhere uncharacterised on the first EBC set_rate.
+ */
+static struct rockchip_pll_rate_table rk3026_cpll_clks[] = {
+	RK3036_PLL_RATE(1064000000, 1, 133, 3, 1, 1, 0),
+	RK3036_PLL_RATE( 798000000, 1, 133, 4, 1, 1, 0),
+	RK3036_PLL_RATE( 594000000, 1,  99, 4, 1, 1, 0),
+	RK3036_PLL_RATE( 560000000, 1,  70, 3, 1, 1, 0),
 	{ /* sentinel */ },
 };
 
@@ -99,11 +120,15 @@ static struct rockchip_pll_rate_table rk3026_gpll_clks[] = {
 		},							\
 	}
 
+/*
+ * The vendor's ARM DVFS table on this unit has exactly one entry: 912 MHz at
+ * 1.4 V (0xc0a53778, terminated by {0, 0xfffffffe}). 1008 MHz is above the
+ * part's 1.0 GHz rating and was inherited, not measured; the apll_clks entry
+ * for 912 MHz (0xc08af57c) programs CLKSEL_CON1 = 0x007f0033, i.e. the
+ * core_periph field is 3 (divide by 4).
+ */
 static struct rockchip_cpuclk_rate_table rk3026_cpuclk_rates[] __initdata = {
-	RK3026_CPUCLK_RATE(1008000000, 4),
-	RK3026_CPUCLK_RATE( 816000000, 4),
-	RK3026_CPUCLK_RATE( 600000000, 4),
-	RK3026_CPUCLK_RATE( 312000000, 4),
+	RK3026_CPUCLK_RATE(912000000, 3),
 };
 
 static const struct rockchip_cpuclk_reg_data rk3026_cpuclk_data = {
@@ -158,7 +183,7 @@ static struct rockchip_pll_clock rk3026_pll_clks[] __initdata = {
 	[dpll] = PLL(pll_rk3036, PLL_DPLL, "dpll", mux_pll_p, 0, RK2928_PLL_CON(4),
 		     RK2928_MODE_CON, 4, 4, 0, NULL),
 	[cpll] = PLL(pll_rk3036, PLL_CPLL, "cpll", mux_pll_p, 0, RK2928_PLL_CON(8),
-		     RK2928_MODE_CON, 8, 6, 0, rk3026_gpll_clks),
+		     RK2928_MODE_CON, 8, 6, 0, rk3026_cpll_clks),
 	[gpll] = PLL(pll_rk3036, PLL_GPLL, "gpll", mux_pll_p, 0, RK2928_PLL_CON(12),
 		     RK2928_MODE_CON, 12, 7, ROCKCHIP_PLL_SYNC_RATE, rk3026_gpll_clks),
 };
@@ -556,6 +581,32 @@ static const char *const rk3026_critical_clocks[] __initconst = {
 	"ddrphy",
 };
 
+/*
+ * Global software reset.
+ *
+ * rockchip_register_restart_notifier() cannot express this one: it always
+ * writes 0xfdb9, whereas the MiniLoader resets by writing 0xeca8 to
+ * CRU+0x104 (GLB_SRST_SND) -- "mov r4,#0x20000000; movw r0,#0xeca8;
+ * str r0,[r4,#0x104]" at 0x60001430, with the same code again in rk30usbplug.
+ *
+ * CRU+0x100 (GLB_SRST_FST) is a real register -- the vendor kernel's own
+ * dump_regs names it -- but nothing in any binary we hold ever writes it, and
+ * 0xfdb9 appears in none of them either. Use the sequence that is proven.
+ */
+static void __iomem *rk3026_cru_base;
+
+static int rk3026_restart_notify(struct notifier_block *this,
+				 unsigned long mode, void *cmd)
+{
+	writel(0xeca8, rk3026_cru_base + RK2928_GLB_SRST_SND);
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block rk3026_restart_handler = {
+	.notifier_call = rk3026_restart_notify,
+	.priority = 128,
+};
+
 static void __init rk3026_clk_init(struct device_node *np)
 {
 	struct rockchip_clk_provider *ctx;
@@ -600,7 +651,9 @@ static void __init rk3026_clk_init(struct device_node *np)
 	rockchip_register_softrst(np, 9, reg_base + RK2928_SOFTRST_CON(0),
 				  ROCKCHIP_SOFTRST_HIWORD_MASK);
 
-	rockchip_register_restart_notifier(ctx, RK2928_GLB_SRST_FST, NULL);
+	rk3026_cru_base = reg_base;
+	if (register_restart_handler(&rk3026_restart_handler))
+		pr_err("%s: failed to register restart handler\n", __func__);
 
 	rockchip_clk_of_add_provider(np, ctx);
 }
