@@ -1871,19 +1871,6 @@ config MFD_TPS65219
 	  This driver can also be built as a module. If so, the module
 	  will be called tps65219.
 
-config MFD_TPS65185
-	tristate "TI TPS65185 EPD PMIC"
-	depends on I2C
-	select MFD_CORE
-	select REGMAP_I2C
-	help
-	  Say yes to enable support for the TI TPS65185 power management IC
-	  for E Ink displays. It provides the high-voltage rails required for
-	  electrophoretic displays.
-
-	  This driver can also be built as a module. If so, the module
-	  will be called tps65185.
-
 config MFD_TPS6586X
 	bool "TI TPS6586x Power Management chips"
 	depends on I2C=y
