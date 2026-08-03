@@ -75,6 +75,36 @@
 		boox_log_reserved: boox-log@64000000 {
 			reg = <0x64000000 0x100000>;
 		};
+
+		/*
+		 * ramoops: the kernel log in DRAM, so it can be read after the
+		 * fact by a stage that still has a console.
+		 *
+		 * This exists because every channel this port has is downstream
+		 * of the thing being debugged. The kernel's console is its own
+		 * USB gadget, so a gadget fault is invisible by construction;
+		 * UART2 is unsoldered; and booxlog's carrier is unreadable in
+		 * the case it was built for, because reaching a U-Boot prompt
+		 * from a wedged kernel means going through Android, which
+		 * overwrites DRAM.
+		 *
+		 * CONSOLE ONLY, and deliberately: with record-size 0 there are
+		 * no dump zones ahead of it, so the console ring starts at the
+		 * base address and `md.b 0x64100000` at the U-Boot prompt reads
+		 * it directly -- a persistent_ram header, then plain text. Give
+		 * it dump records and the console zone moves to an offset that
+		 * has to be recomputed every time the sizes change.
+		 *
+		 * No no-map: same reasoning as boox-log above. Reserved keeps
+		 * the allocator off it, and staying in the linear map avoids
+		 * the uncached-mapping path.
+		 */
+		ramoops@64100000 {
+			compatible = "ramoops";
+			reg = <0x64100000 0x100000>;
+			console-size = <0x100000>;
+			record-size = <0>;
+		};
 	};
 
 	/*
@@ -210,7 +240,23 @@
 		led-0 {
 			label = "status";
 			gpios = <&gpio2 15 GPIO_ACTIVE_HIGH>;
-			linux,default-trigger = "none";
+			/*
+			 * "heartbeat", not "none": a LEVEL cannot distinguish a
+			 * hung kernel from an idle one, and that distinction is
+			 * the whole question on a board whose only console is a
+			 * USB gadget that sometimes never enumerates.
+			 *
+			 * The heartbeat trigger blinks off a kernel timer, so it
+			 * starts long before userspace, needs no init script,
+			 * and STOPS the instant the kernel stops scheduling.
+			 * Blinking = alive; frozen = hung; dark = never got here.
+			 *
+			 * Safe to combine with the init-script LED levels now
+			 * that S99firstlight's beacon is gone -- but if anything
+			 * later writes brightness directly it will fight this
+			 * trigger, so give it back to "none" first.
+			 */
+			linux,default-trigger = "heartbeat";
 		};
 	};
 
@@ -310,14 +356,6 @@
 		regulator-name = "vcc_host";
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
-		/*
-		 * gpio1 5, active low -- the live "wifi_power" line.  Board init
-		 * does gpio_request(165, "wifi_power") and rk29sdk_wifi_power()
-		 * drives it 0 to switch the RTL8188EU on.  There is no host VBUS
-		 * GPIO at all: usb20host_power_enable is a bare "bx lr", and
-		 * gpio0 6 is live-muxed I2C3_SCL.  The vendor parks this off, so
-		 * mainline has to assert it.
-		 */
 		/*
 		 * NO gpio property, deliberately: this regulator registers and
 		 * drives nothing.
@@ -574,6 +612,17 @@
 	status = "okay";
 };
 
+/*
+ * Watchdog, enabled for bring-up. Recovers a POST-BOOT hang only: dw_wdt's
+ * timeout is 2^(16+TOP) cycles, bounded near 89 s at 24 MHz, which is shorter
+ * than a boot on this board -- so arming it early would reset healthy boots.
+ * S99watchdog starts it once init has finished; S01autoreboot covers the boot
+ * window instead. See both scripts for the division of labour.
+ */
+&wdt {
+	status = "okay";
+};
+
 &saradc {
 	status = "okay";
 	vref-supply = <&vcc_io>;
@@ -603,7 +652,39 @@
  */
 &usb_otg {
 	status = "okay";
-	dr_mode = "otg";
+	/*
+	 * "peripheral", NOT "otg" -- established on hardware 2026-08-03.
+	 *
+	 * With dr_mode = "otg", dwc2 picks its role from the ID pin at probe,
+	 * and on this board it chose HOST. The ramoops log shows the proof in
+	 * the shutdown sequence:
+	 *
+	 *	usb usb1-port1: shutdown
+	 *	hub 1-0:1.0: shutdown
+	 *	dwc2 10180000.usb: shutdown
+	 *
+	 * A root hub and a port mean a host controller, and a host controller
+	 * registers no UDC -- so g_serial had nothing to bind, S50adbd found no
+	 * UDC, and NOTHING could ever enumerate on the development host. That is
+	 * the whole of "no console, no adb", and it is structural, not flaky:
+	 * an ioreg watch at 1 Hz never saw a device appear.
+	 *
+	 * WHY IT EXPLAINS THE INTERMITTENCY, which nothing else did: the role is
+	 * decided by an input whose state is NOT ESTABLISHED. If ID is floating
+	 * or unconnected -- plausible on a 4-pin micro-B that never intended OTG
+	 * host -- dwc2 reads an indeterminate value and can pick either role from
+	 * boot to boot. That matches the history exactly: the console worked
+	 * several times and failed several times on byte-identical images, with
+	 * no correlation to any change we made.
+	 *
+	 * ⚠️ NOT the cable. An adapter grounding ID was proposed and is refuted:
+	 * the console came up several times after that adapter was adopted.
+	 *
+	 * The pin's actual state remains unmeasured. Pinning the role here makes
+	 * that irrelevant -- this port is the only debug channel the board has
+	 * without soldering, and it must never be a host.
+	 */
+	dr_mode = "peripheral";
 };
 
 &sdmmc {
