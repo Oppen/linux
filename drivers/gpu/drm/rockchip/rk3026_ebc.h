@@ -99,6 +99,14 @@
 #define GRF_EBC_SEL_BIT		BIT(0)
 
 /*
+ * GRF pad-mux registers for the eight EBC pads, read back only for reporting.
+ * Two bits per pin at 0xa8 + 4 * group; bank 2 groups B, C and D.
+ */
+#define GRF_IOMUX_GPIO2B	0xcc
+#define GRF_IOMUX_GPIO2C	0xd0
+#define GRF_IOMUX_GPIO2D	0xd4
+
+/*
  * Row stride used by the image-address adder: a hardcoded 1024 pixels at two
  * pixels per byte, independent of the panel width.
  */
@@ -171,6 +179,10 @@ struct rk3026_ebc {
 	struct clk		*hclk;
 	struct clk		*dclk;
 	struct clk		*aclk;
+	/* The EBC's own AXI master port; "aclk" is the video NIU, not this. */
+	struct clk		*mclk;
+	/* Asserted as dclk's parent after set_rate — see ebc_hw_init(). */
+	struct clk		*dclk_parent;
 	struct regulator	*epd_supply;
 	struct regmap		*grf;
 	struct thermal_zone_device *tzd;

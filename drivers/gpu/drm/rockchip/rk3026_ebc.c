@@ -99,6 +99,54 @@ static atomic_t dbg_irqs = ATOMIC_INIT(0);
 static u32 dbg_last_status;
 
 /*
+ * DIAGNOSTIC, REVERT ME. Runtime knobs so one card can answer several questions
+ * without a rebuild, because judging a weak panel response by eye is expensive
+ * and ambiguous.
+ *
+ * force_mode: drive every update in this EBC_MODE_* instead of the one the
+ * update carries. Modes 11 and 12 are the DIRECT modes -- they assert neither
+ * DISPLAY_MODE nor UPDATE_MODE, so the controller drives from the image without
+ * the waveform LUT at all. A hard black/white there proves the pad, clock, rail
+ * and image-fetch chain and isolates the fault to the LUT; mush there exonerates
+ * the LUT and points at the data path.
+ *
+ * swap_mst: which buffer goes in WIN_MST0. The vendor's attribution says the
+ * target frame does (docs/PORT-FIXES.md §1.0), but a transposed LUT packing and
+ * a swapped pair cancel, so both orders need to be reachable without a rebuild.
+ */
+static int force_mode = -1;
+module_param(force_mode, int, 0644);
+MODULE_PARM_DESC(force_mode, "override the refresh mode (0-12; -1 = use the update's own)");
+
+static bool swap_mst;
+module_param(swap_mst, bool, 0644);
+MODULE_PARM_DESC(swap_mst, "put next in WIN_MST0 instead of prev (the vendor doc's order, which does NOT work)");
+
+/*
+ * DIAGNOSTIC, REVERT ME. Full-screen white and full-screen black both render
+ * as VERTICAL STRIPES spanning the whole panel (2026-08-03, video). A uniform
+ * source image can only come out non-uniform if something varies along the
+ * source-driver axis, so these are the three fields on that axis, made
+ * settable so the axis can be bisected without a rebuild.
+ *
+ * sdck: source-driver clocks per line. Computed as width/4, but the field is
+ * 8 bits and 1024/4 = 256 does not fit -- the driver's `width < 0x400` test
+ * silently yields 0xff instead, which is either exactly right (if the field
+ * encodes count-1) or one short (if it does not). Nothing establishes which.
+ *
+ * win_vir: the window's virtual width. Written as width | height << 16 and
+ * reads back as 1024; whether the field wants pixels, bytes or 4-pixel groups
+ * is not established either.
+ */
+static int sdck = -1;
+module_param(sdck, int, 0644);
+MODULE_PARM_DESC(sdck, "override EPD_CTRL SDCK (-1 = width/4 saturated to 0xff)");
+
+static uint win_vir;
+module_param(win_vir, uint, 0644);
+MODULE_PARM_DESC(win_vir, "override WIN_VIR's low half in pixels (0 = panel width)");
+
+/*
  * Bytes of the target image that differ from what the panel is believed to
  * show. A waveform whose old and new greys are equal everywhere is *correct*
  * to leave the glass alone, so a zero here puts the fault upstream of the scan.
@@ -122,13 +170,34 @@ static void ebc_report_image(struct rk3026_ebc *ebc)
 		 ebc->img_size, diff, black, white);
 }
 
-/* What the clocks and the EPD rail actually are at the moment of the scan. */
+/*
+ * What the clocks and the EPD rail actually are at the moment of the scan.
+ *
+ * The GRF and CRU reads are here because a good boot and a bad boot have so
+ * far produced dmesg that is identical line for line -- same registers, same
+ * LUT, same frame counts, same 4260 ms -- while the panel images on one and
+ * not the other. Whatever differs is therefore something the driver sets up
+ * but never reads back, and pad mux, the EBC/LCDC pad select and the dclk mux
+ * are exactly that: written once at probe, believed forever after.
+ */
 static void ebc_report_env(struct rk3026_ebc *ebc)
 {
+	u32 iomux2b = 0, iomux2c = 0, iomux2d = 0, ebc_sel = 0;
+
 	dev_info(ebc->dev, "scan: aclk %lu dclk %lu hclk %lu epd_supply %d\n",
 		 clk_get_rate(ebc->aclk), clk_get_rate(ebc->dclk),
 		 clk_get_rate(ebc->hclk),
 		 ebc->epd_supply ? regulator_is_enabled(ebc->epd_supply) : -1);
+
+	if (ebc->grf) {
+		regmap_read(ebc->grf, GRF_IOMUX_GPIO2B, &iomux2b);
+		regmap_read(ebc->grf, GRF_IOMUX_GPIO2C, &iomux2c);
+		regmap_read(ebc->grf, GRF_IOMUX_GPIO2D, &iomux2d);
+		regmap_read(ebc->grf, GRF_EBC_SEL_REG, &ebc_sel);
+	}
+	dev_info(ebc->dev,
+		 "scan: grf iomux2b %08x 2c %08x 2d %08x ebc_sel %08x (want aa/ff28/0a/bit0)\n",
+		 iomux2b, iomux2c, iomux2d, ebc_sel);
 }
 
 /*
@@ -230,7 +299,8 @@ static void ebc_set_window(struct rk3026_ebc *ebc)
 
 	ebc_write(ebc, EBC_WIN_CTRL, WIN_CTRL_FIXED);
 	/* Both halves are written; only the width half reads back. */
-	ebc_write(ebc, EBC_WIN_VIR, size);
+	ebc_write(ebc, EBC_WIN_VIR,
+		  win_vir ? (win_vir | (ebc->height << 16)) : size);
 	ebc_write(ebc, EBC_WIN_ACT, size);
 	ebc_write(ebc, EBC_WIN_DSP, size);
 	ebc_write(ebc, EBC_WIN_DSP_ST,
@@ -251,11 +321,14 @@ static void ebc_set_border(struct rk3026_ebc *ebc)
 static void ebc_set_epd_ctrl(struct rk3026_ebc *ebc)
 {
 	u32 gdck = ebc->timing.hsync_len.typ + ebc->gdck_sta;
-	u32 sdck = ebc->width < 0x400 ? ebc->width / 4 : 0xff;
+	u32 n = ebc->width < 0x400 ? ebc->width / 4 : 0xff;
+
+	if (sdck >= 0)
+		n = sdck;
 
 	ebc_write(ebc, EBC_EPD_CTRL,
 		  EPD_GDCK_STA(gdck) | EPD_LGONL(gdck + ebc->lgonl) |
-		  EPD_SDCK(sdck) | EPD_GATE_SCAN_DIR | EPD_SOURCE_SCAN_DIR);
+		  EPD_SDCK(n) | EPD_GATE_SCAN_DIR | EPD_SOURCE_SCAN_DIR);
 }
 
 /*
@@ -289,16 +362,27 @@ static void ebc_set_dsp_ctrl(struct rk3026_ebc *ebc, u32 mode)
 }
 
 /*
- * MST0 is the image on the panel, MST1 the one being driven towards. Both hold
- * absolute physical addresses, biased by the window origin at two pixels per
- * byte over a fixed 1024-pixel row stride.
+ * MST0 is the image on the panel, MST1 the one being driven towards.
+ *
+ * ⚠️ This order is established ON HARDWARE (2026-08-03): full-screen white and
+ * black render correctly this way round and do not render the other way. It
+ * CONTRADICTS docs/VENDOR-BLOBS.md §5, which reads `ebc_image_addr_set` as
+ * MST0 = current and MST1 = previous. Either that attribution is wrong or our
+ * waveform LUT is packed transposed and the two cancel — unresolved, and the
+ * swap_mst knob exists to keep the losing order reachable. Do not "fix" this
+ * back to match the doc without a card that images.
+ *
+ * Both hold absolute physical addresses, biased by the window origin at two
+ * pixels per byte over a fixed 1024-pixel row stride.
  */
 static void ebc_set_image_addr(struct rk3026_ebc *ebc, u32 x, u32 y)
 {
 	u32 off = (x + y * EBC_ROW_STRIDE) / 2;
+	dma_addr_t m0 = swap_mst ? ebc->next_phys : ebc->prev_phys;
+	dma_addr_t m1 = swap_mst ? ebc->prev_phys : ebc->next_phys;
 
-	ebc_write(ebc, EBC_WIN_MST0, lower_32_bits(ebc->prev_phys) + off);
-	ebc_write(ebc, EBC_WIN_MST1, lower_32_bits(ebc->next_phys) + off);
+	ebc_write(ebc, EBC_WIN_MST0, lower_32_bits(m0) + off);
+	ebc_write(ebc, EBC_WIN_MST1, lower_32_bits(m1) + off);
 	ebc_config_done(ebc);
 }
 
@@ -449,26 +533,37 @@ static void ebc_do_refresh(struct rk3026_ebc *ebc,
 	u32 frames, done = 0, chunk = 0;
 	const u8 *lut;
 	int temp;
+	u32 mode = upd->mode;
 
 	if (!ebc->waveform)
 		return;
+
+	/* DIAGNOSTIC: drive a different mode class with the same data and scan. */
+	if (force_mode >= 0 && force_mode <= EBC_MODE_MAX)
+		mode = force_mode;
 
 	temp = upd->temp_valid ? upd->temp : ebc_read_temp(ebc);
 	if (temp > EBC_TEMP_MAX)
 		temp = EBC_TEMP_FALLBACK;
 
-	lut = rk3026_ebc_waveform_lut(ebc->waveform, upd->mode, temp, &frames);
+	/*
+	 * A direct mode has no LUT of its own; fall back to the update's own mode
+	 * for the scan data so the DSP_CTRL class is the only thing that changed.
+	 */
+	lut = rk3026_ebc_waveform_lut(ebc->waveform, mode, temp, &frames);
+	if (!lut && mode != upd->mode)
+		lut = rk3026_ebc_waveform_lut(ebc->waveform, upd->mode, temp, &frames);
 	if (!lut) {
 		if (debug_scan)
 			dev_info(ebc->dev, "scan: no LUT for mode %u at %d C\n",
-				 upd->mode, temp);
+				 mode, temp);
 		return;
 	}
 
 	if (debug_scan) {
 		dev_info(ebc->dev,
-			 "scan: mode %u temp %d C, %u frames, clip %d,%d-%d,%d\n",
-			 upd->mode, temp, frames, upd->clip.x1, upd->clip.y1,
+			 "scan: mode %u (update asked %u) temp %d C, %u frames, clip %d,%d-%d,%d\n",
+			 mode, upd->mode, temp, frames, upd->clip.x1, upd->clip.y1,
 			 upd->clip.x2, upd->clip.y2);
 		ebc_report_env(ebc);
 		ebc_report_image(ebc);
@@ -480,7 +575,7 @@ static void ebc_do_refresh(struct rk3026_ebc *ebc,
 	 */
 	mutex_lock(&ebc->blit_lock);
 
-	ebc_set_dsp_ctrl(ebc, upd->mode);
+	ebc_set_dsp_ctrl(ebc, mode);
 	ebc_set_image_addr(ebc, 0, 0);
 
 	if (debug_scan)
@@ -904,12 +999,65 @@ static int ebc_hw_init(struct rk3026_ebc *ebc)
 	if (ret)
 		goto err_hclk;
 
+	/*
+	 * ⚠️ BISECT, 2026-08-03: enabling mclk (ACLK_EBC) and asserting dclk's
+	 * parent here is DISABLED, because the two cards that did it are the two
+	 * whose U-Boot console then hung at misc_init_r on the following boot,
+	 * while the four cards that made the identical register writes by hand
+	 * from a running Linux were fine. The U-Boot binary is byte-identical
+	 * across all six (loader checksum 3b8cdcfc), so the suspect is the
+	 * CCF-mediated path, not the register values.
+	 *
+	 * Prime suspect: clk-rk3026.c models aclk_vio1_niu and aclk_ebc on the
+	 * SAME gate bit (CLKGATE_CON9 b10), so refcounting can close it for one
+	 * consumer while the other still needs it -- and ebc_hw_fini() disables
+	 * mclk on shutdown.
+	 *
+	 * Until that is understood, 66 MHz comes from devmem at the shell:
+	 *   0x200000a0 = 0x00000101   dclk_ebc -> GPLL/2
+	 *   0x200000c0 = 0x00000081   aclk_lcdc0_src -> GPLL/2
+	 *   0x200000dc = 0x00010000   ungate aclk_lcdc0_src (CON3 b0)
+	 */
+	if (0 && ebc->mclk) {
+		ret = clk_prepare_enable(ebc->mclk);
+		if (ret)
+			goto err_aclk;
+	}
+
+	/*
+	 * dclk boots muxed to CPLL, which sits in slow mode at 24 MHz -- 12 MHz
+	 * after the divider, against the panel's 20 MHz source-clock spec, and a
+	 * 54-frame scan then takes 4260 ms instead of 790.
+	 *
+	 * ⚠️ Order matters and cost a session. clk_set_rate() alone returns
+	 * SUCCESS and leaves the hardware at 12 MHz: CCF reparents, writes the
+	 * mux, then writes the divider -- and CLKSEL_CON23 reads back 0xff000100,
+	 * which is exactly a hiword-style divider write applied as a plain 32-bit
+	 * store, clearing the mux bit the same call had just set. clk_get_rate()
+	 * then reports the rate CCF believes, not the one the panel gets. So the
+	 * parent is asserted LAST, and the register is logged rather than trusted.
+	 */
 	ret = clk_set_rate(ebc->dclk, EBC_DCLK_RATE);
 	if (ret)
-		goto err_aclk;
+		goto err_mclk;
+	/*
+	 * Re-enabled 2026-08-03, alone: mclk above stays disabled, so this card
+	 * tests the reparent by itself. With it compiled out a scan measured
+	 * 4260 ms for 54 frames against the driver's own 635 ms expectation --
+	 * i.e. 12 MHz -- while clk_get_rate() reported 66 MHz. Frame time is the
+	 * instrument; the CCF view is not.
+	 */
+	if (ebc->dclk_parent) {
+		ret = clk_set_parent(ebc->dclk, ebc->dclk_parent);
+		if (ret)
+			goto err_mclk;
+	}
 	ret = clk_prepare_enable(ebc->dclk);
 	if (ret)
-		goto err_aclk;
+		goto err_mclk;
+
+	dev_info(ebc->dev, "dclk %lu Hz (CCF's view; check a scan's frame time)\n",
+		 clk_get_rate(ebc->dclk));
 
 	/* Route the shared display pads to EBC rather than LCDC. */
 	if (ebc->grf)
@@ -927,6 +1075,8 @@ static int ebc_hw_init(struct rk3026_ebc *ebc)
 	ebc_config_done(ebc);
 	return 0;
 
+err_mclk:
+	clk_disable_unprepare(ebc->mclk);
 err_aclk:
 	clk_disable_unprepare(ebc->aclk);
 err_hclk:
@@ -939,6 +1089,7 @@ static void ebc_hw_fini(void *data)
 	struct rk3026_ebc *ebc = data;
 
 	clk_disable_unprepare(ebc->dclk);
+	clk_disable_unprepare(ebc->mclk);
 	clk_disable_unprepare(ebc->aclk);
 	clk_disable_unprepare(ebc->hclk);
 }
@@ -1023,6 +1174,13 @@ static int ebc_probe(struct platform_device *pdev)
 	ebc->aclk = devm_clk_get(dev, "aclk");
 	if (IS_ERR(ebc->aclk))
 		return dev_err_probe(dev, PTR_ERR(ebc->aclk), "no aclk\n");
+	/* Both optional so an older device tree still probes. */
+	ebc->mclk = devm_clk_get_optional(dev, "mclk");
+	if (IS_ERR(ebc->mclk))
+		return dev_err_probe(dev, PTR_ERR(ebc->mclk), "bad mclk\n");
+	ebc->dclk_parent = devm_clk_get_optional(dev, "dclk-parent");
+	if (IS_ERR(ebc->dclk_parent))
+		return dev_err_probe(dev, PTR_ERR(ebc->dclk_parent), "bad dclk-parent\n");
 
 	ebc->grf = syscon_regmap_lookup_by_phandle(dev->of_node, "rockchip,grf");
 	if (IS_ERR(ebc->grf)) {
@@ -1070,13 +1228,22 @@ static int ebc_probe(struct platform_device *pdev)
 		}
 	}
 
-	/* Panel thermometer, in the EPD PMIC. Without it every bucket is 25 C. */
+	/*
+	 * Panel thermometer, in the EPD PMIC. This is a REAL dependency, not a
+	 * nicety: the waveform LUT is selected by temperature, so a driver that
+	 * probes before the zone exists does not degrade, it drives every
+	 * update from the wrong bucket for the life of the boot -- silently,
+	 * behind one dev_warn. Defer instead, and let the ordering resolve.
+	 *
+	 * The zone comes from the tps65185's hwmon channel via the THERMAL_OF
+	 * bridge, so this waits on an i2c driver several subsystems away, which
+	 * is exactly the kind of ordering that varies between boots.
+	 */
 	ebc->tzd = thermal_zone_get_zone_by_name("epd-thermal");
-	if (IS_ERR(ebc->tzd)) {
-		dev_warn(dev, "no epd-thermal zone; assuming %d C\n",
-			 EBC_TEMP_FALLBACK);
-		ebc->tzd = NULL;
-	}
+	if (IS_ERR(ebc->tzd))
+		return dev_err_probe(dev, -EPROBE_DEFER,
+				     "epd-thermal zone not ready (%ld)\n",
+				     PTR_ERR(ebc->tzd));
 
 	ret = of_reserved_mem_device_init(dev);
 	if (ret)
