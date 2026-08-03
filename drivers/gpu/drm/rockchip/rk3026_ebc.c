@@ -967,40 +967,6 @@ static const struct drm_driver ebc_drm_driver = {
 
 /* --- bring-up --- */
 
-/*
- * Record the EBC -> thermal-sensor dependency as a device link.
- *
- * The zone is found by name, so nothing in DT expresses this edge and
- * fw_devlink cannot build it. Without the link the relationship exists only
- * inside this driver: it does not appear in sysfs, it does not order
- * suspend/resume, and the sensor can unbind underneath a driver still holding
- * its zone. DL_FLAG_AUTOREMOVE_CONSUMER drops the link when we unbind.
- *
- * Advisory: a failure here costs the ordering guarantee, not the temperature,
- * so it warns rather than aborting a probe that would otherwise work.
- */
-static void ebc_link_thermal(struct rk3026_ebc *ebc)
-{
-	struct device *sensor;
-	struct device_link *link;
-
-	/*
-	 * struct thermal_zone_device is opaque outside thermal_core.h, so this
-	 * accessor is the only way to the device -- do not reach for ->device.
-	 * It yields the ZONE's device, which is the thing whose existence this
-	 * driver actually depends on.
-	 */
-	sensor = thermal_zone_device(ebc->tzd);
-	if (!sensor)
-		return;
-
-	link = device_link_add(ebc->dev, sensor,
-			       DL_FLAG_AUTOREMOVE_CONSUMER | DL_FLAG_PM_RUNTIME);
-	if (!link)
-		dev_warn(ebc->dev,
-			 "no device link to the thermal sensor; ordering is not enforced\n");
-}
-
 static int ebc_setup_buffers(struct rk3026_ebc *ebc)
 {
 	ebc->img_size = ebc->width * ebc->height / 2;
@@ -1277,23 +1243,23 @@ static int ebc_probe(struct platform_device *pdev)
 	 *   real probe-order edge. So by the time we are here the PMIC has
 	 *   probed. That link is what devm_regulator_get() above establishes.
 	 *
-	 * - Against the ZONE: not expressible in DT. fw_devlink builds edges
-	 *   only from phandle properties it knows (clocks, *-supply, gpios,
-	 *   ...), and there is no binding for "I consume the zone named X" --
-	 *   the lookup is a string, so a custom phandle property would be
-	 *   inert. device_link_add() below records that edge at runtime, which
-	 *   is the mechanism DT lacks: it makes the dependency visible in
-	 *   sysfs, orders suspend/resume, and unbinds us if the sensor goes.
+	 * - Against the ZONE: not expressible, and NOT expressible as a device
+	 *   link either. A device link models a driver-bound supplier, and a
+	 *   thermal zone device has no driver -- so the link never reaches
+	 *   DL_STATE_CONSUMER_PROBE and device_links_driver_bound() splats
+	 *   WARN_ON(link->status != DL_STATE_CONSUMER_PROBE) (core.c:1383) the
+	 *   moment this driver binds. That warning was added here on
+	 *   2026-08-03 and removed the same day; do not reintroduce it.
 	 *
-	 * EPROBE_DEFER remains for the window before the zone registers, which
-	 * is failure handling, not the declaration.
+	 * So EPROBE_DEFER is not a lesser substitute for a declaration here,
+	 * it is the mechanism: the ordering that CAN be declared already is,
+	 * through the supply, and the zone is waited for.
 	 */
 	ebc->tzd = thermal_zone_get_zone_by_name("epd-thermal");
 	if (IS_ERR(ebc->tzd))
 		return dev_err_probe(dev, -EPROBE_DEFER,
 				     "epd-thermal zone not ready (%ld)\n",
 				     PTR_ERR(ebc->tzd));
-	ebc_link_thermal(ebc);
 
 	ret = of_reserved_mem_device_init(dev);
 	if (ret)
