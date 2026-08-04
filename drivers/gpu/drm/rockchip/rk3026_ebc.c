@@ -146,19 +146,31 @@ MODULE_PARM_DESC(swap_mst, "put prev in WIN_MST0 (the transposed order that only
  * full-screen black renders as strong black crossed by regular, slightly
  * slanted white vertical stripes.
  *
- * A uniform source image can only come out non-uniform if something varies
- * along the source-driver axis, so these are the fields on that axis, made
- * settable so it can be bisected without a rebuild. The slant specifically
- * suggests a per-line phase walk accumulating down the panel.
+ * ⚠️ DO NOT TOUCH EITHER KNOB YET. The axis the artifact lives on is NOT
+ * established, and an earlier revision of this comment asserted that it was --
+ * claiming the stripes must vary along the source-driver axis. That was
+ * inference, not measurement, and the framebuffer is 1024x758 on a physically
+ * portrait device, so which fb axis maps to which physical one is exactly the
+ * thing in question. Retracted rather than reworded.
  *
- * ⚠️ Establish which axis the artifact tracks BEFORE touching either knob:
- * `fbpoke hsplit` and `fbpoke vsplit` each draw one hard edge. Stripes that
- * stop at the edge follow image content; stripes that cross it unchanged follow
- * scan timing.
+ * What IS measured on hardware (2026-08-03/04), all with writes confirmed to
+ * have landed via the `differ from prev` count:
  *
- * ⚠️ And note sdck's suspicious value is NOT obviously wrong: Android drives
- * this panel with EPD_CTRL bit-identical to ours (0x5110ff03, same 0xff), so
- * 255 is evidently correct and something else on that axis differs.
+ *   - the stripes appear for EVERY pattern -- black, white, hsplit, vsplit,
+ *     geometry and ybands alike -- so they are largely content-INDEPENDENT
+ *   - `fbpoke ybands` (varies ONLY between lines, 64-line bands) produced NO
+ *     bands, so content that varies line-to-line is not reaching the glass
+ *   - `fbpoke xbands` (varies ONLY within a line) was drawn but its result is
+ *     not yet read
+ *
+ * ⚠️ And sdck's suspicious value is NOT obviously wrong: Android drives this
+ * panel with EPD_CTRL bit-identical to ours (0x5110ff03, same 0xff = 255), so
+ * 255 is evidently correct and something else differs.
+ *
+ * ⚠️ Uniform images cannot reveal a mapping fault -- uniform in, uniform out.
+ * Every apparent success before these probes (black, white, the RESET refresh)
+ * was uniform, which is the same blind spot that hid the transposed MST order
+ * for a whole session.
  *
  * sdck: source-driver clocks per line. Computed as width/4, but the field is
  * 8 bits and 1024/4 = 256 does not fit -- the driver's `width < 0x400` test
