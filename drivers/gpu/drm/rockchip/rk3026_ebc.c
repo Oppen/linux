@@ -177,9 +177,12 @@ MODULE_PARM_DESC(swap_mst, "put prev in WIN_MST0 (the transposed order that only
  * silently yields 0xff instead, which is either exactly right (if the field
  * encodes count-1) or one short (if it does not). Nothing establishes which.
  *
- * win_vir: the window's virtual width. Written as width | height << 16 and
- * reads back as 1024; whether the field wants pixels, bytes or 4-pixel groups
- * is not established either.
+ * win_vir: the window's virtual width. ✅ **The unit is settled: PIXELS.** Android
+ * drives this panel with WIN_VIR = 0x00000400 live (docs/VENDOR-BLOBS.md §6,
+ * tier 0) = 1024 = width exactly, high half zero. So the knob is now only for
+ * deliberately trying a *wrong* stride, not for resolving an ambiguity -- and
+ * WIN_VIR is ELIMINATED as the cause of `ybands` showing no bands, because our
+ * low half already matched.
  */
 static int sdck = -1;
 module_param(sdck, int, 0644);
@@ -352,9 +355,20 @@ static void ebc_set_window(struct rk3026_ebc *ebc)
 	u32 size = ebc->width | (ebc->height << 16);
 
 	ebc_write(ebc, EBC_WIN_CTRL, WIN_CTRL_FIXED);
-	/* Both halves are written; only the width half reads back. */
-	ebc_write(ebc, EBC_WIN_VIR,
-		  win_vir ? (win_vir | (ebc->height << 16)) : size);
+	/*
+	 * WIN_VIR is the window's virtual width, in PIXELS, and the high half
+	 * stays ZERO -- Android drives this panel with 0x00000400 live
+	 * (docs/VENDOR-BLOBS.md §6, tier 0), i.e. 1024 with nothing above it,
+	 * while every other register in the block matches us bit-for-bit.
+	 *
+	 * We used to write `width | height << 16` here. That made WIN_VIR the
+	 * ONLY divergence from a known-good configuration, so it is removed:
+	 * matching the vendor costs nothing and the alternative is carrying an
+	 * unexplained delta into every panel experiment. It also settles the
+	 * unit question the P15 notes raised -- pixels, not bytes and not
+	 * 4-pixel groups, since 0x400 == width exactly.
+	 */
+	ebc_write(ebc, EBC_WIN_VIR, win_vir ? win_vir : ebc->width);
 	ebc_write(ebc, EBC_WIN_ACT, size);
 	ebc_write(ebc, EBC_WIN_DSP, size);
 	ebc_write(ebc, EBC_WIN_DSP_ST,
