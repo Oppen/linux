@@ -186,6 +186,7 @@ static void ebc_report_image(struct rk3026_ebc *ebc)
 {
 	const u8 *p = ebc->prev_virt, *n = ebc->next_virt;
 	size_t i, diff = 0, black = 0, white = 0;
+	u32 hn = 2166136261u, hp = 2166136261u;
 
 	for (i = 0; i < ebc->img_size; i++) {
 		if (p[i] != n[i])
@@ -194,11 +195,21 @@ static void ebc_report_image(struct rk3026_ebc *ebc)
 			black++;
 		else if (n[i] == 0xff)
 			white++;
+		/*
+		 * Position-sensitive fingerprints, because the counts are NOT.
+		 * A half-black image has the same totals whether the split is
+		 * horizontal or vertical, so "194048 x00 194048 xff" matched both
+		 * fbpoke hsplit and vsplit -- and a dropped update therefore read
+		 * as a plausible new one on 2026-08-03. FNV-1a; the value means
+		 * nothing on its own, only whether it CHANGED.
+		 */
+		hn = (hn ^ n[i]) * 16777619u;
+		hp = (hp ^ p[i]) * 16777619u;
 	}
 
 	dev_info(ebc->dev,
-		 "scan: image %zu bytes, %zu differ from prev, next %zu x00 %zu xff\n",
-		 ebc->img_size, diff, black, white);
+		 "scan: image %zu bytes, %zu differ from prev, next %zu x00 %zu xff, fp next %08x prev %08x\n",
+		 ebc->img_size, diff, black, white, hn, hp);
 }
 
 /*
