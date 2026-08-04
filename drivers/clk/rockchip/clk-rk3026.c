@@ -418,9 +418,27 @@ static struct rockchip_clk_branch rk3026_clk_branches[] __initdata = {
 	 *           gate=CLK_GATE_DCLK_EBC_SRC (CON3 bit4)
 	 * aclk_ebc: sourced from aclk_lcdc0_src, gated at CON9 bit10 (ACLK_VIO1)
 	 * hclk_ebc: sourced from hclk_disp_pre, gated at CON9 bit9
+	 *
+	 * ⚠️ CLKSEL_CON(23) is NOT hiword-write-masked, unlike the other CLKSEL
+	 * registers, so this composite takes no MFLAGS/DFLAGS. Measured on hardware
+	 * 2026-08-03: bits[31:16] are readable storage, and a plain 32-bit store of
+	 * 0x00000101 changed bit 0 -- a mask would have ignored the whole low half.
+	 * By contrast CLKGATE_CON(0..9) all read back with zero upper halves, and
+	 * CON(12) still held its bootloader value after this file's own
+	 * HIWORD_UPDATE() at init, so both of those blocks are genuinely masked.
+	 *
+	 * With DFLAGS the divider write landed as the literal 0xff000100, whose
+	 * would-be mask bits are just data here -- clearing mux bit 0 and parking
+	 * dclk_ebc on CPLL, which sits in slow mode at 24 MHz. clk_set_rate() then
+	 * returned success at 12 MHz and clk_get_rate() reported the 66 MHz CCF
+	 * believed, because CCF's cached parent was still the GPLL it read at
+	 * registration. A following clk_set_parent() to that same parent is a no-op,
+	 * which is why asserting the parent last did not repair it either.
+	 * Correcting the register by hand took a 54-frame scan from 4270 ms to
+	 * 790 ms against the driver's own 635 ms expectation.
 	 */
 	COMPOSITE(DCLK_EBC, "dclk_ebc", mux_pll_src_cpll_gpll_p, 0,
-			RK2928_CLKSEL_CON(23), 0, 1, MFLAGS, 8, 8, DFLAGS,
+			RK2928_CLKSEL_CON(23), 0, 1, 0, 8, 8, 0,
 			RK2928_CLKGATE_CON(3), 4, GFLAGS),
 	GATE(ACLK_EBC, "aclk_ebc", "aclk_lcdc0_src", CLK_IGNORE_UNUSED,
 			RK2928_CLKGATE_CON(9), 10, GFLAGS),
