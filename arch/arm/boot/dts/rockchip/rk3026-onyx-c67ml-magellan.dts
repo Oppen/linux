@@ -783,8 +783,28 @@
 &ebc {
 	status = "okay";
 	memory-region = <&ebc_reserved>;
-	/* vposneg is the sequenced high-voltage rail the panel needs. */
+	/*
+	 * All THREE rails the panel needs, and it needs all three.
+	 *
+	 * vposneg is the sequenced high-voltage pair. v3p3 is the panel's logic
+	 * supply. vcom drives the common electrode.
+	 *
+	 * ⚠️ v3p3 and vcom were declared in the PMIC node but had NO CONSUMER until
+	 * 2026-08-03, so nothing ever enabled them -- and for vcom that is not
+	 * merely "off": upstream tps65185 makes the VCOM_CTRL pin that regulator's
+	 * ena_gpiod and requests it GPIOD_OUT_LOW, and per SLVSAQ8G pin 12 a low
+	 * VCOM_CTRL *actively discharges* VCOM. So the port spent every boot
+	 * bleeding the common electrode away.
+	 *
+	 * That is why the panel "imaged once and never again": a card started with
+	 * `adb reboot` inherits a charged VCOM from Android and images while the
+	 * charge lasts, then loses it for good. Blob tier confirms the target
+	 * state -- the vendor writes ENABLE = 0xAF, i.e. V3P3_EN set, VCOM_EN
+	 * CLEAR, VCOM controlled by the pin alone (docs/VENDOR-BLOBS.md:430).
+	 */
 	epd-supply = <&vposneg_reg>;
+	v3p3-supply = <&v3p3_reg>;
+	vcom-supply = <&vcom_reg>;
 
 	/* E Ink ED060XC3T1, 6.0" 1024x758.  Panel ID read live from this unit's
 	 * own waveform container ("_C172_WR4601_ED060XC3T1_TC").

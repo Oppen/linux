@@ -184,6 +184,17 @@ struct rk3026_ebc {
 	/* Asserted as dclk's parent after set_rate — see ebc_hw_init(). */
 	struct clk		*dclk_parent;
 	struct regulator	*epd_supply;
+	/*
+	 * VCOM (the panel's common electrode) and V3P3 (its logic supply). Both
+	 * are separate rails on the TPS65185 and both were unconsumed until
+	 * 2026-08-03, so nothing ever enabled them: the vendor writes
+	 * ENABLE = 0xAF, i.e. V3P3_EN set, and drives VCOM through its own
+	 * VCOM_CTRL pin, which upstream models as the vcom regulator's ena_gpiod.
+	 * Left unconsumed, that pin stays low -- and low does not merely disable
+	 * the amplifier, it actively DISCHARGES VCOM (SLVSAQ8G pin 12).
+	 */
+	struct regulator	*vcom_supply;
+	struct regulator	*v3p3_supply;
 	struct regmap		*grf;
 	struct thermal_zone_device *tzd;
 	int			irq;

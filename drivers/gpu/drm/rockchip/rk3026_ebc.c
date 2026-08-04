@@ -870,18 +870,45 @@ static void ebc_crtc_atomic_enable(struct drm_crtc *crtc,
 	int ret;
 
 	/*
-	 * The high-voltage rails must be up before the panel is driven; the PMIC
-	 * sequences them internally once ENABLE is written.
+	 * Order matters and it is the datasheet's, not a preference. V3P3 is the
+	 * panel's logic rail. The high-voltage rails come next; the PMIC sequences
+	 * them internally per UPSEQ once ENABLE is written. VCOM goes LAST because
+	 * its enable is internally gated on the positive boost (DCDC1) already
+	 * being in regulation (SLVSAQ8G: "Positive boost (DCDC1) must be in
+	 * regulation before VCOM can be enabled").
 	 */
+	if (ebc->v3p3_supply) {
+		ret = regulator_enable(ebc->v3p3_supply);
+		if (ret) {
+			dev_err(ebc->dev, "failed to enable v3p3: %d\n", ret);
+			return;
+		}
+	}
+
 	ret = regulator_enable(ebc->epd_supply);
 	if (ret) {
 		dev_err(ebc->dev, "failed to enable EPD rails: %d\n", ret);
-		return;
+		goto err_v3p3;
+	}
+
+	if (ebc->vcom_supply) {
+		ret = regulator_enable(ebc->vcom_supply);
+		if (ret) {
+			dev_err(ebc->dev, "failed to enable VCOM: %d\n", ret);
+			goto err_epd;
+		}
 	}
 
 	/* Drive the panel to a known white before anything is composed on it. */
 	memset(ebc->next_virt, 0xff, ebc->img_size);
 	rk3026_ebc_queue_update(ebc, &clip, EBC_MODE_RESET, 0, false, 0);
+	return;
+
+err_epd:
+	regulator_disable(ebc->epd_supply);
+err_v3p3:
+	if (ebc->v3p3_supply)
+		regulator_disable(ebc->v3p3_supply);
 }
 
 static void ebc_crtc_atomic_disable(struct drm_crtc *crtc,
@@ -891,7 +918,12 @@ static void ebc_crtc_atomic_disable(struct drm_crtc *crtc,
 
 	/* Let any waveform in flight finish before the rails drop. */
 	rk3026_ebc_wait_idle(ebc);
+	/* Reverse of atomic_enable: VCOM first, then the rails, then logic. */
+	if (ebc->vcom_supply)
+		regulator_disable(ebc->vcom_supply);
 	regulator_disable(ebc->epd_supply);
+	if (ebc->v3p3_supply)
+		regulator_disable(ebc->v3p3_supply);
 }
 
 static const struct drm_crtc_funcs ebc_crtc_funcs = {
@@ -1169,6 +1201,29 @@ static int ebc_probe(struct platform_device *pdev)
 	if (IS_ERR(ebc->epd_supply))
 		return dev_err_probe(dev, PTR_ERR(ebc->epd_supply),
 				     "failed to get EPD rail supply\n");
+
+	/*
+	 * Optional so a device tree predating these properties still probes, but a
+	 * board that omits them cannot image -- see the struct comment. Both are
+	 * enabled in ebc_crtc_atomic_enable() rather than here, so the panel is
+	 * only powered while the CRTC is on.
+	 */
+	ebc->v3p3_supply = devm_regulator_get_optional(dev, "v3p3");
+	if (IS_ERR(ebc->v3p3_supply)) {
+		if (PTR_ERR(ebc->v3p3_supply) != -ENODEV)
+			return dev_err_probe(dev, PTR_ERR(ebc->v3p3_supply),
+					     "failed to get v3p3 supply\n");
+		ebc->v3p3_supply = NULL;
+		dev_warn(dev, "no v3p3-supply; the panel's logic rail is unmanaged\n");
+	}
+	ebc->vcom_supply = devm_regulator_get_optional(dev, "vcom");
+	if (IS_ERR(ebc->vcom_supply)) {
+		if (PTR_ERR(ebc->vcom_supply) != -ENODEV)
+			return dev_err_probe(dev, PTR_ERR(ebc->vcom_supply),
+					     "failed to get vcom supply\n");
+		ebc->vcom_supply = NULL;
+		dev_warn(dev, "no vcom-supply; VCOM stays discharged and nothing will image\n");
+	}
 
 	init_completion(&ebc->frame_done);
 	init_waitqueue_head(&ebc->update_wq);
