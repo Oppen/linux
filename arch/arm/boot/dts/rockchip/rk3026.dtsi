@@ -186,6 +186,25 @@
 				reg = <0x190>;
 				clocks = <&cru USBPHY_480M>;
 				clock-names = "phyclk";
+				/*
+				 * UTMI1 reset, SOFTRST_CON6 bit 8. clk-rk3026.c
+				 * registers 9 hiword softrst banks, so the id is
+				 * bank * 16 + bit = 6 * 16 + 8 = 104.
+				 *
+				 * Needed because the host PHY comes out of reset
+				 * suspended with no 480 MHz UTMI clock, so dwc2's
+				 * CSFTRST never self-clears and the controller
+				 * fails probe with -16 on every cold boot. The
+				 * vendor never resets the host block on its own
+				 * (usb20host_soft_reset is a bare `bx lr`) --
+				 * usb20otg_soft_reset resets BOTH ports' UTMI
+				 * together. docs/SETTLED.md 2026-08-04.
+				 *
+				 * Deliberately NOT added to usb_otg_phy: that one
+				 * already works and carries the only console.
+				 */
+				resets = <&cru 104>;
+				reset-names = "phy-reset";
 				#phy-cells = <0>;
 			};
 		};
