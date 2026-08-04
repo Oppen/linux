@@ -55,11 +55,25 @@
 
 #define DRIVER_NAME		"rk3026-ebc"
 #define EBC_WAVEFORM_FW		"rockchip/rk3026-c67ml.rkf"
-/* A cold GC16 waveform is ~130 frames at 85 Hz; the vendor arms 3 s. */
-/* DIAGNOSTIC, REVERT ME: was 3000. Splits "the frame never completes" from
- * "the frame is too slow for the budget" -- aclk_lcdc1 is 24 MHz off a
- * bypassed CPLL, and dclk_ebc landed on 66 MHz instead of the intended 80. */
-#define EBC_FRAME_TIMEOUT_MS	60000
+/*
+ * Per-CHUNK frame budget, and a chunk is at most EBC_LUT_MAX_FRAMES (64) frames.
+ *
+ * Measured on hardware 2026-08-03 with dclk_ebc at 66 MHz: 54 frames take
+ * 790-800 ms, i.e. ~14.8 ms/frame, so a full 64-frame chunk is ~950 ms. 5 s is
+ * a little over 5x that.
+ *
+ * This replaces a deliberately absurd 60000 that was set while the dot clock was
+ * still stuck at 12 MHz, so it could not read as a considered value.
+ *
+ * ⚠️ Do NOT tighten this toward the measured time. The timeout path `break`s out
+ * of the frame loop, which abandons the waveform partway, and a panel left
+ * mid-transition accumulates real ghosting and darkening that persists into
+ * Android -- that is exactly what a 3000 ms budget did against a 3.1 s waveform
+ * on 2026-08-02. A budget that is merely tight is not a benign mis-tuning on this
+ * hardware, it is cumulative damage. Either keep the generous margin, or make the
+ * timeout path finish the waveform instead of breaking.
+ */
+#define EBC_FRAME_TIMEOUT_MS	5000
 /* Longest a client may block in MXCFB_WAIT_FOR_UPDATE_COMPLETE. */
 #define EBC_MARKER_TIMEOUT_MS	10000
 
@@ -128,11 +142,23 @@ module_param(swap_mst, bool, 0644);
 MODULE_PARM_DESC(swap_mst, "put prev in WIN_MST0 (the transposed order that only drives toward white)");
 
 /*
- * DIAGNOSTIC, REVERT ME. Full-screen white and full-screen black both render
- * as VERTICAL STRIPES spanning the whole panel (2026-08-03, video). A uniform
- * source image can only come out non-uniform if something varies along the
- * source-driver axis, so these are the three fields on that axis, made
- * settable so the axis can be bisected without a rebuild.
+ * Knobs for the ONE open panel defect (docs/PENDING.md P15): a uniform
+ * full-screen black renders as strong black crossed by regular, slightly
+ * slanted white vertical stripes.
+ *
+ * A uniform source image can only come out non-uniform if something varies
+ * along the source-driver axis, so these are the fields on that axis, made
+ * settable so it can be bisected without a rebuild. The slant specifically
+ * suggests a per-line phase walk accumulating down the panel.
+ *
+ * ⚠️ Establish which axis the artifact tracks BEFORE touching either knob:
+ * `fbpoke hsplit` and `fbpoke vsplit` each draw one hard edge. Stripes that
+ * stop at the edge follow image content; stripes that cross it unchanged follow
+ * scan timing.
+ *
+ * ⚠️ And note sdck's suspicious value is NOT obviously wrong: Android drives
+ * this panel with EPD_CTRL bit-identical to ours (0x5110ff03, same 0xff), so
+ * 255 is evidently correct and something else on that axis differs.
  *
  * sdck: source-driver clocks per line. Computed as width/4, but the field is
  * 8 bits and 1024/4 = 256 does not fit -- the driver's `width < 0x400` test
