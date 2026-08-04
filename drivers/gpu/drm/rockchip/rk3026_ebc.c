@@ -110,9 +110,14 @@ static u32 dbg_last_status;
  * and image-fetch chain and isolates the fault to the LUT; mush there exonerates
  * the LUT and points at the data path.
  *
- * swap_mst: which buffer goes in WIN_MST0. The vendor's attribution says the
- * target frame does (docs/PORT-FIXES.md §1.0), but a transposed LUT packing and
- * a swapped pair cancel, so both orders need to be reachable without a rebuild.
+ * swap_mst: go back to the pre-2026-08-03 order, prev in WIN_MST0. That order
+ * indexes the waveform LUT transposed and drives one-directionally -- the panel
+ * only ever bleaches toward white, never darkens -- so this exists to reproduce
+ * that failure, not as an equal alternative. The default is the vendor's order
+ * (docs/VENDOR-BLOBS.md §5), which is what made the panel finally image.
+ *
+ * ⚠️ Takes effect on the SECOND scan, not the first: WIN_MST0/1 are shadowed.
+ * See ebc_set_image_addr().
  */
 static int force_mode = -1;
 module_param(force_mode, int, 0644);
@@ -120,7 +125,7 @@ MODULE_PARM_DESC(force_mode, "override the refresh mode (0-12; -1 = use the upda
 
 static bool swap_mst;
 module_param(swap_mst, bool, 0644);
-MODULE_PARM_DESC(swap_mst, "put next in WIN_MST0 instead of prev (the vendor doc's order, which does NOT work)");
+MODULE_PARM_DESC(swap_mst, "put prev in WIN_MST0 (the transposed order that only drives toward white)");
 
 /*
  * DIAGNOSTIC, REVERT ME. Full-screen white and full-screen black both render
@@ -362,15 +367,27 @@ static void ebc_set_dsp_ctrl(struct rk3026_ebc *ebc, u32 mode)
 }
 
 /*
- * MST0 is the image on the panel, MST1 the one being driven towards.
+ * MST0 is the image being driven TOWARDS, MST1 the one on the panel — i.e.
+ * MST0 = next, MST1 = prev, which is what docs/VENDOR-BLOBS.md §5 reads out of
+ * `ebc_image_addr_set`. The vendor attribution was right.
  *
- * ⚠️ This order is established ON HARDWARE (2026-08-03): full-screen white and
- * black render correctly this way round and do not render the other way. It
- * CONTRADICTS docs/VENDOR-BLOBS.md §5, which reads `ebc_image_addr_set` as
- * MST0 = current and MST1 = previous. Either that attribution is wrong or our
- * waveform LUT is packed transposed and the two cancel — unresolved, and the
- * swap_mst knob exists to keep the losing order reachable. Do not "fix" this
- * back to match the doc without a card that images.
+ * ⚠️ PROVEN ON HARDWARE 2026-08-03, and it is what finally made the panel go
+ * black. The previous order indexed the waveform LUT transposed, so a
+ * white->black transition looked up the black->white cell and drove toward
+ * white. That is why every scan for a whole session bleached the panel and
+ * nothing ever darkened: the drive was real but one-directional.
+ *
+ * ⚠️ The comment that stood here claimed the OPPOSITE order was "established ON
+ * HARDWARE… full-screen white and black render correctly this way round and do
+ * not render the other way". That was written in a session in which the panel
+ * rendered nothing at all, so it recorded a belief as a measurement, and it read
+ * as settled for a day. Retracted.
+ *
+ * ⚠️ WIN_MST0/1 are SHADOWED: a write does not affect the scan that follows it,
+ * only the one after, because the shadow goes active on a latch the scan itself
+ * performs. So flipping this (or swap_mst) and running ONE scan tests nothing —
+ * the first scan still uses the previous pair. Verify against the `armed`
+ * readback, not against what was just written.
  *
  * Both hold absolute physical addresses, biased by the window origin at two
  * pixels per byte over a fixed 1024-pixel row stride.
@@ -378,8 +395,8 @@ static void ebc_set_dsp_ctrl(struct rk3026_ebc *ebc, u32 mode)
 static void ebc_set_image_addr(struct rk3026_ebc *ebc, u32 x, u32 y)
 {
 	u32 off = (x + y * EBC_ROW_STRIDE) / 2;
-	dma_addr_t m0 = swap_mst ? ebc->next_phys : ebc->prev_phys;
-	dma_addr_t m1 = swap_mst ? ebc->prev_phys : ebc->next_phys;
+	dma_addr_t m0 = swap_mst ? ebc->prev_phys : ebc->next_phys;
+	dma_addr_t m1 = swap_mst ? ebc->next_phys : ebc->prev_phys;
 
 	ebc_write(ebc, EBC_WIN_MST0, lower_32_bits(m0) + off);
 	ebc_write(ebc, EBC_WIN_MST1, lower_32_bits(m1) + off);
