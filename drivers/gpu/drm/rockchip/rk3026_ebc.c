@@ -124,11 +124,11 @@ static u32 dbg_last_status;
  * and image-fetch chain and isolates the fault to the LUT; mush there exonerates
  * the LUT and points at the data path.
  *
- * swap_mst: go back to the pre-2026-08-03 order, prev in WIN_MST0. That order
- * indexes the waveform LUT transposed and drives one-directionally -- the panel
- * only ever bleaches toward white, never darkens -- so this exists to reproduce
- * that failure, not as an equal alternative. The default is the vendor's order
- * (docs/VENDOR-BLOBS.md §5), which is what made the panel finally image.
+ * swap_mst: put NEXT in WIN_MST0 -- the order this driver shipped between
+ * 2026-08-03 and 2026-08-05, which drives one-directionally: the panel only ever
+ * bleaches toward white and never darkens. It exists to reproduce that failure,
+ * not as an equal alternative. The default is now the vendor's order, prev in
+ * MST0 (docs/re/EBC-REGISTERS.md §5).
  *
  * ⚠️ Takes effect on the SECOND scan, not the first: WIN_MST0/1 are shadowed.
  * See ebc_set_image_addr().
@@ -139,7 +139,7 @@ MODULE_PARM_DESC(force_mode, "override the refresh mode (0-12; -1 = use the upda
 
 static bool swap_mst;
 module_param(swap_mst, bool, 0644);
-MODULE_PARM_DESC(swap_mst, "put prev in WIN_MST0 (the transposed order that only drives toward white)");
+MODULE_PARM_DESC(swap_mst, "put next in WIN_MST0 (the transposed order that only drives toward white)");
 
 /*
  * Knobs for the ONE open panel defect (docs/PENDING.md P15): a uniform
@@ -158,10 +158,16 @@ MODULE_PARM_DESC(swap_mst, "put prev in WIN_MST0 (the transposed order that only
  *
  *   - the stripes appear for EVERY pattern -- black, white, hsplit, vsplit,
  *     geometry and ybands alike -- so they are largely content-INDEPENDENT
- *   - `fbpoke ybands` (varies ONLY between lines, 64-line bands) produced NO
- *     bands, so content that varies line-to-line is not reaching the glass
- *   - `fbpoke xbands` (varies ONLY within a line) was drawn but its result is
- *     not yet read
+ *   - ⚠️ "`fbpoke ybands` produced NO bands, so content that varies line-to-line
+ *     is not reaching the glass" is RETRACTED (2026-08-05). Re-run on the card
+ *     that carries the AXI-clock fix, from a forced black baseline, ybands
+ *     produced clear bands. The source address DOES advance per line, and the
+ *     stride hypothesis is dead. The original reading was taken on a card whose
+ *     aclk was still 24 MHz -- check `scan: aclk` before trusting a panel result
+ *   - `fbpoke xbands` and `ramp` show structure only in a strip near the top
+ *     rather than across the panel. Both were drawn while the MST order was
+ *     still transposed, so every greyscale reading from them is suspect; re-run
+ *     now that direction is correct before theorising
  *
  * ⚠️ And sdck's suspicious value is NOT obviously wrong: Android drives this
  * panel with EPD_CTRL bit-identical to ours (0x5110ff03, same 0xff = 255), so
@@ -430,21 +436,38 @@ static void ebc_set_dsp_ctrl(struct rk3026_ebc *ebc, u32 mode)
 }
 
 /*
- * MST0 is the image being driven TOWARDS, MST1 the one on the panel — i.e.
- * MST0 = next, MST1 = prev, which is what docs/VENDOR-BLOBS.md §5 reads out of
- * `ebc_image_addr_set`. The vendor attribution was right.
+ * MST0 holds PREV -- the image on the panel -- and MST1 holds NEXT, the one
+ * being driven towards.
  *
- * ⚠️ PROVEN ON HARDWARE 2026-08-03, and it is what finally made the panel go
- * black. The previous order indexed the waveform LUT transposed, so a
- * white->black transition looked up the black->white cell and drove toward
- * white. That is why every scan for a whole session bleached the panel and
- * nothing ever darkened: the drive was real but one-directional.
+ * Two independent lines of evidence, which finally agree:
  *
- * ⚠️ The comment that stood here claimed the OPPOSITE order was "established ON
- * HARDWARE… full-screen white and black render correctly this way round and do
- * not render the other way". That was written in a session in which the panel
- * rendered nothing at all, so it recorded a belief as a measurement, and it read
- * as settled for a day. Retracted.
+ * - The audited vendor kernel (docs/re/EBC-REGISTERS.md §5). ebc_register_update
+ *   at 0xc0607414 loads [dev+0x18c] into arg1 -> MST0 and [dev+0x190] into
+ *   arg2 -> MST1, dispatched through ops+0x14. ebc_thread proves which is which:
+ *   it stores the freshly dequeued buffer to 0x190 (0xc0609728), drives, then
+ *   ebc_buf_release()s 0x18c (0xc06098f8) and rotates 0x18c = 0x190. The buffer
+ *   released after the scan is the one that was on the glass.
+ *
+ * - Hardware, 2026-08-05: with next in MST0 a black frame renders LIGHT and a
+ *   white frame renders darker -- the transposed lookup, driving one-directionally
+ *   toward white. With prev in MST0, white brightens and black darkens.
+ *   Reproduced twice, same card, same boot, identical transitions, every draw
+ *   with a nonzero `differ from prev`.
+ *
+ * ⚠️ This REVERSES what this driver did between 2026-08-03 and 2026-08-05
+ * (f2227388e331), which put next in MST0 on the strength of docs/VENDOR-BLOBS.md
+ * §5 -- a decompile of a linux/.refs/rychly object with no evidentiary standing.
+ * The comment that stood here called that "PROVEN ON HARDWARE" and credited it
+ * with making the panel image; the session it cites changed more than one thing
+ * at once, so it never isolated MST order at all.
+ *
+ * ⚠️ An even earlier comment claimed the order this code now uses was
+ * "established ON HARDWARE", in a session where the panel rendered nothing. It
+ * happened to be right, and it was still a belief recorded as a measurement.
+ * Being accidentally correct is not evidence.
+ *
+ * ⚠️ MST order and LUT index order are a PAIR: inverting one alone inverts the
+ * transition lookup. Do not change one without re-testing direction on glass.
  *
  * ⚠️ WIN_MST0/1 are SHADOWED: a write does not affect the scan that follows it,
  * only the one after, because the shadow goes active on a latch the scan itself
@@ -458,8 +481,8 @@ static void ebc_set_dsp_ctrl(struct rk3026_ebc *ebc, u32 mode)
 static void ebc_set_image_addr(struct rk3026_ebc *ebc, u32 x, u32 y)
 {
 	u32 off = (x + y * EBC_ROW_STRIDE) / 2;
-	dma_addr_t m0 = swap_mst ? ebc->prev_phys : ebc->next_phys;
-	dma_addr_t m1 = swap_mst ? ebc->next_phys : ebc->prev_phys;
+	dma_addr_t m0 = swap_mst ? ebc->next_phys : ebc->prev_phys;
+	dma_addr_t m1 = swap_mst ? ebc->prev_phys : ebc->next_phys;
 
 	ebc_write(ebc, EBC_WIN_MST0, lower_32_bits(m0) + off);
 	ebc_write(ebc, EBC_WIN_MST1, lower_32_bits(m1) + off);
