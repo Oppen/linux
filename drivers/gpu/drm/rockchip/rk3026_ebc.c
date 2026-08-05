@@ -510,6 +510,39 @@ static void ebc_frame_kick(struct rk3026_ebc *ebc, const u8 *lut,
 	for (i = 0; i < words; i++)
 		ebc_write(ebc, EBC_LUT_BASE + i * 4, get_unaligned_le32(src + i * 4));
 
+	/*
+	 * Drain everything the CPU has written before the controller is told to
+	 * fetch it. Two distinct things need this and neither had it:
+	 *
+	 *  - the IMAGE, in prev_virt/next_virt, which are DMA_ATTR_WRITE_COMBINE
+	 *    (ebc_setup_buffers). Write-combining means the blit's stores sit in a
+	 *    merge buffer with no ordering against the EBC's AXI master reading
+	 *    the same memory.
+	 *  - the LUT SRAM and the register group just above, written with
+	 *    writel_relaxed() throughout, which by definition orders nothing.
+	 *
+	 * Why this is the prime suspect for docs/PENDING.md P15 rather than a
+	 * theoretical tidy-up: it predicts exactly the observed asymmetry. Uniform
+	 * black/white always rendered, because when every byte is identical it does
+	 * not matter which stores landed or in what order. `ybands` renders, because
+	 * 64-line bands are long contiguous runs and whole bursts survive. `xbands`
+	 * does not, because variation WITHIN a line is the finest granularity and
+	 * exactly what write-combining coalesces away. And the vendor path draws the
+	 * same patterns correctly from the same 4bpp packing (proven on hardware
+	 * 2026-08-05), so the format is not the problem.
+	 *
+	 * The vendor does the equivalent explicitly: flush_cache_all() + outer_sync()
+	 * after every generated frame, on a pool that is additionally mapped uncached
+	 * (docs/re/EBC-DATAPATH.md).
+	 *
+	 * ⚠️ ebc_report_lut() below is a READ of the LUT window, and a read drains
+	 * posted writes. So while debug_scan was armed this ordering happened by
+	 * accident, and it stopped happening when the budget ran out -- which makes
+	 * every "608/608 LUT words match" measurement one taken under a barrier that
+	 * normal operation did not have. The barrier must not depend on logging.
+	 */
+	wmb();
+
 	if (debug_scan)
 		ebc_report_lut(ebc, src, words, chunk);
 
@@ -532,6 +565,15 @@ static void ebc_frame_kick(struct rk3026_ebc *ebc, const u8 *lut,
 	ebc_write(ebc, EBC_DSP_START, ebc->dsp_start);
 
 	ebc_config_done(ebc);
+
+	/*
+	 * Second drain, and the placement is the point: everything from WIN_DSP_ST
+	 * down to CONFIG_DONE above is writel_relaxed(), so the barrier after the
+	 * LUT does NOT order this register group against the FRAME_START below.
+	 * Without this the controller can be started before its own window and
+	 * frame count have landed.
+	 */
+	wmb();
 
 	ebc->dsp_start |= DSP_FRAME_START;
 	ebc_write(ebc, EBC_DSP_START, ebc->dsp_start);
