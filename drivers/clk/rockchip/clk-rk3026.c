@@ -654,6 +654,38 @@ static void __init rk3026_clk_init(struct device_node *np)
 	writel_relaxed(HIWORD_UPDATE(0, 0x1, 15),
 		       reg_base + RK2928_CLKSEL_CON(12));
 
+	/*
+	 * Park both LCDC AXI sources on GPLL at /1. CLKSEL_CON(31) holds
+	 * aclk_lcdc0_src (bit7 mux, bits[6:0] div) and aclk_lcdc1_src (bit15 mux,
+	 * bits[12:8] div); the reset value 0x0001 selects CPLL for both, and CPLL
+	 * sits in slow mode at 24 MHz because nothing ever sets a rate on it. The
+	 * EBC borrows this path for its AXI fetch, so it ran at 24 MHz against the
+	 * vendor's 256.
+	 *
+	 * Measured on hardware 2026-08-04, unit 1: with the panel showing fbpoke
+	 * vsplit, writing 0xffff8080 here took the artifact from stripes that
+	 * SLANT -- drifting sideways down the panel, i.e. a per-line phase error
+	 * accumulating line over line -- to stripes that are straight and evenly
+	 * spaced. Photographed before and after, same pattern, same mode, only this
+	 * register changed. It does NOT make content appear; a vsplit still shows
+	 * no vertical edge, so this is one fault of at least two (docs/PENDING.md
+	 * P15).
+	 *
+	 * ⚠️ Before registration on purpose. CCF caches a composite's parent from
+	 * whatever the register says when the branch is registered, so correcting
+	 * this afterwards would leave the cached parent wrong and make a later
+	 * clk_set_parent() to that same parent a no-op -- exactly the trap that hid
+	 * the dclk_ebc/CON23 defect, where clk_set_rate() returned success at
+	 * 12 MHz. See the CLKSEL_CON(23) comment above.
+	 *
+	 * ⚠️ GPLL is 132 MHz here, not the vendor's 768, so this yields 132 MHz and
+	 * not the vendor's 256. Raising GPLL, or taking CPLL out of slow mode to
+	 * 560, is a separate change and must pin this divider in the SAME commit --
+	 * at /1 a 560 MHz CPLL would put 560 MHz on an AXI bus.
+	 */
+	writel_relaxed(HIWORD_UPDATE(0x8080, 0xffff, 0),
+		       reg_base + RK2928_CLKSEL_CON(31));
+
 	clk_nr_clks = rockchip_clk_find_max_clk_id(rk3026_clk_branches,
 						    ARRAY_SIZE(rk3026_clk_branches)) + 1;
 	ctx = rockchip_clk_init(np, reg_base, clk_nr_clks);
