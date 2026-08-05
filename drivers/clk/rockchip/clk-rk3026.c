@@ -440,8 +440,23 @@ static struct rockchip_clk_branch rk3026_clk_branches[] __initdata = {
 	COMPOSITE(DCLK_EBC, "dclk_ebc", mux_pll_src_cpll_gpll_p, 0,
 			RK2928_CLKSEL_CON(23), 0, 1, 0, 8, 8, 0,
 			RK2928_CLKGATE_CON(3), 4, GFLAGS),
-	GATE(ACLK_EBC, "aclk_ebc", "aclk_lcdc0_src", CLK_IGNORE_UNUSED,
-			RK2928_CLKGATE_CON(9), 10, GFLAGS),
+	/*
+	 * ACLK_EBC is the SAME physical clock as aclk_vio1_niu: both were
+	 * modelled as GATE objects on CLKGATE_CON(9) bit 10, which is one bit
+	 * with two refcounts -- a disable through either closes it under the
+	 * other, and the EBC driver's fini path disables its own. That hazard is
+	 * why enabling the EBC's AXI master clock was left switched off in
+	 * rk3026_ebc.c for two days (docs/PENDING.md P8).
+	 *
+	 * So it is one clock, expressed as a 1:1 factor with no second gate. The
+	 * gate lives on aclk_vio1_niu, which the EBC also holds via "aclk".
+	 *
+	 * ⚠️ The old parent, aclk_lcdc0_src, was wrong as well (P16): it is gated
+	 * at CLKGATE_CON(3) bit 0 on BOTH our kernel and the vendor's, so a
+	 * consumer enabling aclk_ebc was asking CCF for a clock whose modelled
+	 * parent is off, while the hardware bit it actually needs is CON9 b10.
+	 */
+	FACTOR(ACLK_EBC, "aclk_ebc", "aclk_vio1_niu", 0, 1, 1),
 	GATE(HCLK_EBC, "hclk_ebc", "hclk_peri_src", 0,
 			RK2928_CLKGATE_CON(9), 9, GFLAGS),
 

@@ -1112,25 +1112,28 @@ static int ebc_hw_init(struct rk3026_ebc *ebc)
 		goto err_hclk;
 
 	/*
-	 * ⚠️ BISECT, 2026-08-03: enabling mclk (ACLK_EBC) and asserting dclk's
-	 * parent here is DISABLED, because the two cards that did it are the two
-	 * whose U-Boot console then hung at misc_init_r on the following boot,
-	 * while the four cards that made the identical register writes by hand
-	 * from a running Linux were fine. The U-Boot binary is byte-identical
-	 * across all six (loader checksum 3b8cdcfc), so the suspect is the
-	 * CCF-mediated path, not the register values.
+	 * mclk is ACLK_EBC, the block's own AXI master port -- the clock the
+	 * controller fetches the image over. Without it the timing generator
+	 * still runs off dclk, so frames complete and the frame-end IRQ arrives
+	 * on schedule while no pixel data is ever read: exactly the signature of
+	 * a scan that reports success and leaves the glass untouched.
 	 *
-	 * Prime suspect: clk-rk3026.c models aclk_vio1_niu and aclk_ebc on the
-	 * SAME gate bit (CLKGATE_CON9 b10), so refcounting can close it for one
-	 * consumer while the other still needs it -- and ebc_hw_fini() disables
-	 * mclk on shutdown.
+	 * ⚠️ This was `if (0 && ebc->mclk)` from 2026-08-03 to 2026-08-05. It was
+	 * disabled because the two cards that enabled it were also the two whose
+	 * U-Boot console hung at misc_init_r on the FOLLOWING boot -- but that
+	 * was never shown to be caused by this, and the same session's dead
+	 * console was later traced to a flat battery and a hub (docs/INDEX.md).
+	 * Three separate reviews since concluded the disable was not addressing a
+	 * real cause; none of them re-enabled it. Being probably-not-the-hang
+	 * does not make skipping the AXI clock correct.
 	 *
-	 * Until that is understood, 66 MHz comes from devmem at the shell:
-	 *   0x200000a0 = 0x00000101   dclk_ebc -> GPLL/2
-	 *   0x200000c0 = 0x00000081   aclk_lcdc0_src -> GPLL/2
-	 *   0x200000dc = 0x00010000   ungate aclk_lcdc0_src (CON3 b0)
+	 * The real hazard the old comment named IS real and is fixed in the same
+	 * change: clk-rk3026.c modelled aclk_vio1_niu and aclk_ebc as two GATE
+	 * objects on the SAME bit (CLKGATE_CON9 b10), so a disable from either
+	 * closes the bit under the other -- and ebc_hw_fini() disables mclk. It
+	 * is now one clock: ACLK_EBC is a FACTOR of aclk_vio1_niu, no second gate.
 	 */
-	if (0 && ebc->mclk) {
+	if (ebc->mclk) {
 		ret = clk_prepare_enable(ebc->mclk);
 		if (ret)
 			goto err_aclk;
