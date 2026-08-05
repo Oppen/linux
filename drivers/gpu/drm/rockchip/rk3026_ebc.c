@@ -1171,24 +1171,60 @@ static const struct drm_driver ebc_drm_driver = {
 
 /* --- bring-up --- */
 
+/*
+ * ONE allocation, the two frames adjacent -- prev first, next at +img_size.
+ *
+ * This mirrors the vendor exactly, and the difference was measured rather than
+ * guessed. Live vendor registers during a working refresh (2026-08-05):
+ *
+ *	MST0 = 0x7c800000   MST1 = 0x7c85ec00   delta 0x5ec00 == img_size
+ *
+ * Ours, from two separate dmam_alloc_attrs() calls:
+ *
+ *	MST0 = 0x7f600000   MST1 = 0x7f680000   delta 0x80000, with a 0x14400 gap
+ *
+ * By the time this was written that was the LAST known difference between the
+ * vendor's setup and ours. Everything else had been checked and matched: all
+ * 21 registers including EPD_CTRL/DSP_CTRL/DSP_START/INT, the LUT SRAM word
+ * count for the mode, the rails (ENABLE 0x3f, PG 0xfa, VCOM1 0xb4, vcom_ctl
+ * high, LDO4 on), the clocks, the MST order, the 4bpp packing, the geometry, and
+ * -- verified with devmem at the physical addresses -- the image bytes
+ * themselves, correct across the whole frame with the right 32-byte xbands
+ * period on lines 0, 1 and 100.
+ *
+ * And the failure shape fits: uniform content drove the whole panel while
+ * structured content appeared only in a strip at one edge, i.e. the panel was
+ * inert wherever the controller saw prev == next. That is what a second fetch
+ * landing somewhere other than where we think would produce, while leaving every
+ * CPU-side check passing.
+ *
+ * ⚠️ HYPOTHESIS, not established: nothing in the audited vendor code says the
+ * controller requires contiguity or derives the second address itself. What is
+ * established is only that the vendor's two buffers ARE contiguous and ours were
+ * not. If this does not fix it, the contiguity idea is dead and should be
+ * recorded as such rather than left hanging -- but the layout is worth keeping
+ * regardless, because matching a known-good configuration costs nothing.
+ */
 static int ebc_setup_buffers(struct rk3026_ebc *ebc)
 {
-	ebc->img_size = ebc->width * ebc->height / 2;
+	size_t pool;
 
-	ebc->prev_virt = dmam_alloc_attrs(ebc->dev, ebc->img_size,
-					  &ebc->prev_phys, GFP_KERNEL,
-					  DMA_ATTR_WRITE_COMBINE);
+	ebc->img_size = ebc->width * ebc->height / 2;
+	pool = ebc->img_size * 2;
+
+	ebc->prev_virt = dmam_alloc_attrs(ebc->dev, pool, &ebc->prev_phys,
+					  GFP_KERNEL, DMA_ATTR_WRITE_COMBINE);
 	if (!ebc->prev_virt)
 		return -ENOMEM;
-	ebc->next_virt = dmam_alloc_attrs(ebc->dev, ebc->img_size,
-					  &ebc->next_phys, GFP_KERNEL,
-					  DMA_ATTR_WRITE_COMBINE);
-	if (!ebc->next_virt)
-		return -ENOMEM;
+
+	ebc->next_virt = ebc->prev_virt + ebc->img_size;
+	ebc->next_phys = ebc->prev_phys + ebc->img_size;
+
+	dev_info(ebc->dev, "images: prev %pad next %pad (delta %#zx, one pool of %#zx)\n",
+		 &ebc->prev_phys, &ebc->next_phys, (size_t)ebc->img_size, pool);
 
 	/* The panel is assumed white after power-up. */
-	memset(ebc->prev_virt, 0xff, ebc->img_size);
-	memset(ebc->next_virt, 0xff, ebc->img_size);
+	memset(ebc->prev_virt, 0xff, pool);
 	return 0;
 }
 
