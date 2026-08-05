@@ -77,8 +77,17 @@
 /* Longest a client may block in MXCFB_WAIT_FOR_UPDATE_COMPLETE. */
 #define EBC_MARKER_TIMEOUT_MS	10000
 
-/* Refresh mode used when nothing annotates the update. */
-#define EBC_MODE_DEFAULT	EBC_MODE_PART
+/*
+ * Refresh mode used when nothing annotates the update.
+ *
+ * FULL, not PART. EBC_MODE_PART is a partial waveform: it under-saturates a
+ * full black/white transition by construction, which is CONFIRMED on hardware
+ * as the reason contrast was poor -- force_mode=1 renders solid black where the
+ * default rendered washed grey (docs/PENDING.md P18). A partial waveform is an
+ * optimisation for small incremental changes, and this driver has no business
+ * defaulting to one before it can render a full frame at all.
+ */
+#define EBC_MODE_DEFAULT	EBC_MODE_FULL
 
 static inline void ebc_write(struct rk3026_ebc *ebc, u32 reg, u32 val)
 {
@@ -951,12 +960,30 @@ static void ebc_plane_atomic_update(struct drm_plane *plane,
 	struct drm_shadow_plane_state *shadow =
 		to_drm_shadow_plane_state(new_state);
 	struct rk3026_ebc *ebc = drm_to_ebc(plane->dev);
-	struct drm_rect clip;
+	struct drm_rect clip = DRM_RECT_INIT(0, 0, ebc->width, ebc->height);
 	int idx;
 
+	/*
+	 * FULL FRAME, ALWAYS. Damage tracking is deliberately not used here.
+	 *
+	 * This driver cannot yet render a full frame correctly, so computing
+	 * merged damage rectangles and defaulting to a PARTIAL waveform was
+	 * sophistication ahead of the basics -- and it cost twice over. It is a
+	 * whole class of possible faults (a clip that is wrong, a region that is
+	 * never blitted, a stale prev buffer outside the damage) layered under an
+	 * unsolved one, and EBC_MODE_PART is separately CONFIRMED to be why
+	 * contrast was poor: a partial waveform under-saturates a full black/white
+	 * transition by design (docs/PENDING.md P18, force_mode=1 renders solid
+	 * black where the default renders washed grey).
+	 *
+	 * So: blit the whole framebuffer, scan the whole panel, use the full
+	 * waveform. Restore damage handling only once full refreshes are reliable,
+	 * and treat it as an optimisation with its own evidence rather than as a
+	 * default. old_state is consequently unused.
+	 */
+	(void)old_state;
+
 	if (!new_state->fb || !new_state->visible)
-		return;
-	if (!drm_atomic_helper_damage_merged(old_state, new_state, &clip))
 		return;
 	if (!drm_dev_enter(plane->dev, &idx))
 		return;
@@ -1514,7 +1541,12 @@ static int ebc_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 	drm_plane_helper_add(&ebc->plane, &ebc_plane_helper_funcs);
-	drm_plane_enable_fb_damage_clips(&ebc->plane);
+	/*
+	 * Damage clips are NOT advertised: ebc_plane_atomic_update() ignores damage
+	 * and always refreshes the whole panel, so claiming the capability would
+	 * invite userspace to send rectangles we then throw away. Re-enable it with
+	 * the partial path, not before.
+	 */
 
 	ret = drm_crtc_init_with_planes(drm, &ebc->crtc, &ebc->plane, NULL,
 					&ebc_crtc_funcs, NULL);
