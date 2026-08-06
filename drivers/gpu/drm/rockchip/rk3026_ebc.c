@@ -105,6 +105,31 @@ static void ebc_config_done(struct rk3026_ebc *ebc)
 }
 
 /*
+ * Source-driver clock, from the device tree's panel-timing, and the dot clock
+ * derived from it.
+ *
+ * These are board and panel properties, so they belong in the DT and not in a
+ * header. of_get_display_timing() already parses `clock-frequency` into
+ * timing.pixelclock; the driver simply ignored it and used a constant, which is
+ * how the two came to disagree.
+ *
+ * dclk is four times the source clock: the 8-bit source bus carries four 2-bit
+ * pixels per clock, which is the same x4 the vendor applies before its own
+ * clk_set_rate.
+ */
+static unsigned long ebc_pixel_rate(struct rk3026_ebc *ebc)
+{
+	unsigned long hz = ebc->timing.pixelclock.typ;
+
+	return hz ? hz : EBC_PIXEL_RATE_FALLBACK;
+}
+
+static unsigned long ebc_dclk_rate(struct rk3026_ebc *ebc)
+{
+	return ebc_pixel_rate(ebc) * 4;
+}
+
+/*
  * DIAGNOSTIC, REVERT ME. The scan completes -- frame-end interrupts arrive and
  * no chunk times out -- while the glass does not move, so every stage between
  * the source image and the panel is reported as a positive marker rather than
@@ -1147,7 +1172,7 @@ static int ebc_connector_get_modes(struct drm_connector *connector)
 		return 0;
 
 	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
-	mode->clock = EBC_PIXEL_RATE / 1000;
+	mode->clock = ebc_pixel_rate(ebc) / 1000;
 	mode->hdisplay = ebc->width;
 	mode->hsync_start = ebc->width;
 	mode->hsync_end = ebc->width;
@@ -1318,21 +1343,44 @@ static int ebc_hw_init(struct rk3026_ebc *ebc)
 	 * then reports the rate CCF believes, not the one the panel gets. So the
 	 * parent is asserted LAST, and the register is logged rather than trusted.
 	 */
-	ret = clk_set_rate(ebc->dclk, EBC_DCLK_RATE);
-	if (ret)
-		goto err_mclk;
 	/*
-	 * Re-enabled 2026-08-03, alone: mclk above stays disabled, so this card
-	 * tests the reparent by itself. With it compiled out a scan measured
-	 * 4260 ms for 54 frames against the driver's own 635 ms expectation --
-	 * i.e. 12 MHz -- while clk_get_rate() reported 66 MHz. Frame time is the
-	 * instrument; the CCF view is not.
+	 * PARENT FIRST, THEN RATE. This order is load-bearing and it is the
+	 * REVERSE of what this function did until 2026-08-06.
+	 *
+	 * clk_set_rate() is free to satisfy a request from either parent, so
+	 * asking for 12 MHz can be answered with CPLL (slow mode, 24 MHz) and a
+	 * divider of 1. Reparenting afterwards to GPLL keeps that divider and
+	 * 132/2 lands on 66 MHz -- the rate is destroyed by the very call that
+	 * follows it, silently, with both calls returning success. That is why a
+	 * cold boot still measured 940 ms for 64 frames when the driver had asked
+	 * for 12 MHz.
+	 *
+	 * Asserting the parent last was CORRECT while CLKSEL_CON23 was declared
+	 * with the HIWORD_MASK flags, because the divider write then landed as
+	 * 0xff000100 and cleared the mux bit. Those flags are gone from
+	 * clk-rk3026.c, so the workaround outlived the bug it was working around.
+	 *
+	 * ⚠️ Verify against the FRAME TIME in the scan log, never clk_get_rate():
+	 * 38 frames take ~3000 ms at 12 MHz and ~560 ms at 66.
 	 */
 	if (ebc->dclk_parent) {
 		ret = clk_set_parent(ebc->dclk, ebc->dclk_parent);
 		if (ret)
 			goto err_mclk;
 	}
+
+	/*
+	 * The rate comes from the DEVICE TREE, not a compiled-in constant: it is
+	 * a property of this panel and this board. of_get_display_timing() has
+	 * already parsed `panel-timing { clock-frequency }` into timing.pixelclock,
+	 * and the driver used to ignore it in favour of EBC_PIXEL_RATE.
+	 *
+	 * dclk runs at four times the source clock because the 8-bit source bus
+	 * carries four 2-bit pixels per clock.
+	 */
+	ret = clk_set_rate(ebc->dclk, ebc_dclk_rate(ebc));
+	if (ret)
+		goto err_mclk;
 	ret = clk_prepare_enable(ebc->dclk);
 	if (ret)
 		goto err_mclk;
