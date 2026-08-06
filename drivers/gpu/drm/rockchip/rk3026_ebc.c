@@ -209,10 +209,15 @@ MODULE_PARM_DESC(win_vir, "override WIN_VIR's low half in pixels (0 = panel widt
 
 /*
  * Bytes of the target image that differ from what the panel is believed to
- * show. A waveform whose old and new greys are equal everywhere is *correct*
- * to leave the glass alone, so a zero here puts the fault upstream of the scan.
+ * show, and the value the skip decision in ebc_do_refresh() is made on.
+ *
+ * This is computed on EVERY refresh, not just when logging: a waveform whose
+ * old and new greys are equal everywhere drives the panel to where it already
+ * is, which is pure wear. The cost is one pass over 388 KiB against a scan of
+ * three seconds, so it does not need to be conditional and must not be -- when
+ * it was inside `if (debug_scan)` the driver could not act on it at all.
  */
-static void ebc_report_image(struct rk3026_ebc *ebc)
+static size_t ebc_report_image(struct rk3026_ebc *ebc)
 {
 	const u8 *p = ebc->prev_virt, *n = ebc->next_virt;
 	size_t i, diff = 0, black = 0, white = 0;
@@ -237,9 +242,12 @@ static void ebc_report_image(struct rk3026_ebc *ebc)
 		hp = (hp ^ p[i]) * 16777619u;
 	}
 
-	dev_info(ebc->dev,
-		 "scan: image %zu bytes, %zu differ from prev, next %zu x00 %zu xff, fp next %08x prev %08x\n",
-		 ebc->img_size, diff, black, white, hn, hp);
+	if (debug_scan)
+		dev_info(ebc->dev,
+			 "scan: image %zu bytes, %zu differ from prev, next %zu x00 %zu xff, fp next %08x prev %08x\n",
+			 ebc->img_size, diff, black, white, hn, hp);
+
+	return diff;
 }
 
 /*
@@ -720,7 +728,6 @@ static void ebc_do_refresh(struct rk3026_ebc *ebc,
 			 mode, upd->mode, temp, frames, upd->clip.x1, upd->clip.y1,
 			 upd->clip.x2, upd->clip.y2);
 		ebc_report_env(ebc);
-		ebc_report_image(ebc);
 	}
 
 	/*
@@ -728,6 +735,37 @@ static void ebc_do_refresh(struct rk3026_ebc *ebc,
 	 * so writers are held off for the whole waveform.
 	 */
 	mutex_lock(&ebc->blit_lock);
+
+	/*
+	 * Nothing changed? Then do not drive the panel.
+	 *
+	 * This is not an optimisation, it is a correctness and wear fix. Every
+	 * update arrives here TWICE: FBIOPAN_DISPLAY alone produces two atomic
+	 * commits through drm_fb_helper's fbdev emulation (measured 2026-08-06 --
+	 * skipping the client's msync changes nothing), and ebc_plane_atomic_update()
+	 * queues a full-panel refresh for each without asking whether the pixels
+	 * moved. So the second scan runs a complete waveform with prev == next.
+	 *
+	 * A GC16 waveform with identical prev and next is NOT a no-op: it still
+	 * runs its whole flash sequence, so it re-shows the previous image and
+	 * settles back. At 12 MHz that is a visible three-second replay after
+	 * every single draw, which is what "the previous image comes back" was.
+	 * Left alone it is also continuous wear -- fbcon's cursor blink drove a
+	 * 38-frame full waveform every ~1.1 s indefinitely (docs/PENDING.md P29).
+	 *
+	 * ⚠️ EBC_MODE_RESET is exempt, and the test is on the UPDATE's own mode,
+	 * not the possibly-forced one. The boot-time clear legitimately has
+	 * prev == next == white: the controller indexes its LUT by (prev, next),
+	 * so the driver must MAKE the panel white rather than assume it is, and
+	 * skipping that would leave whatever the previous OS left on the glass.
+	 * Keying off `mode` instead would let force_mode disable the boot clear.
+	 */
+	if (!ebc_report_image(ebc) && upd->mode != EBC_MODE_RESET) {
+		if (debug_scan)
+			dev_info(ebc->dev, "scan: skipped, image identical to prev\n");
+		mutex_unlock(&ebc->blit_lock);
+		return;
+	}
 
 	ebc_set_dsp_ctrl(ebc, mode);
 	ebc_set_image_addr(ebc, 0, 0);
