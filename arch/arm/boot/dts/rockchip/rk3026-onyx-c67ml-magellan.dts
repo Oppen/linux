@@ -828,7 +828,26 @@
 	rotation = <270>;
 
 	panel-timing {
-		clock-frequency = <20000000>;
+		/*
+		 * 🔴 3 MHz, NOT the panel table's 20 MHz, and this is a WORKAROUND.
+		 *
+		 * The driver runs dclk at 4x this (four 2-bit pixels per source
+		 * clock), so 3 MHz here means dclk = 12 MHz. Measured on hardware
+		 * 2026-08-06 with fbpoke's 50 mm `circle`, one variable at a time:
+		 * 12 MHz renders a clean disc, a legible alphabet and visible
+		 * checkers; 26.4, 33, 44 and 66 MHz all render garbage. Above
+		 * ~12 MHz the block does not get a line's worth of pixels in time,
+		 * so uniform fills survive and anything with structure smears --
+		 * which is what looked for weeks like a transposition or a stride
+		 * error.
+		 *
+		 * ⚠️ The vendor runs 20 MHz here (dclk 80). A 6x shortfall is far
+		 * too large to be tuning, so do NOT treat this as the fix: the
+		 * suspect is the EBC's AXI master clock (docs/PENDING.md P16/P8).
+		 * Raise this back toward 20 MHz once that is fixed, and re-check
+		 * with `circle`. A refresh costs ~3 s meanwhile.
+		 */
+		clock-frequency = <3000000>;
 		hactive = <1024>;
 		vactive = <758>;
 		hsync-len = <6>;	/* LSL */
