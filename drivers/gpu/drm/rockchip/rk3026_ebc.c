@@ -23,6 +23,7 @@
 #include <linux/io.h>
 #include <linux/kthread.h>
 #include <linux/ktime.h>
+#include <linux/math64.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -73,7 +74,8 @@
  * hardware, it is cumulative damage. Either keep the generous margin, or make the
  * timeout path finish the waveform instead of breaking.
  */
-#define EBC_FRAME_TIMEOUT_MS	5000
+#define EBC_FRAME_TIMEOUT_MARGIN	4
+#define EBC_FRAME_TIMEOUT_MIN_MS	5000
 /* Longest a client may block in MXCFB_WAIT_FOR_UPDATE_COMPLETE. */
 #define EBC_MARKER_TIMEOUT_MS	10000
 
@@ -127,6 +129,42 @@ static unsigned long ebc_pixel_rate(struct rk3026_ebc *ebc)
 static unsigned long ebc_dclk_rate(struct rk3026_ebc *ebc)
 {
 	return ebc_pixel_rate(ebc) * 4;
+}
+
+/**
+ * ebc_chunk_timeout_ms - frame budget for one chunk, DERIVED from the timings
+ * @ebc: controller
+ * @frames: frames in this chunk
+ *
+ * A fixed budget is coupled to the dot clock, and that coupling broke silently:
+ * EBC_FRAME_TIMEOUT_MS was 5000, sized when 64 frames took ~950 ms at dclk
+ * 66 MHz. Lowering the clock to 12 MHz made a 64-frame chunk take 5050 ms, so
+ * the FIRST scan of every boot -- the RESET that clears the panel -- timed out
+ * 40 ms over, broke out of the frame loop and drove 0 of 101 frames. The panel
+ * came up holding whatever was on it, and nothing in the log said "too slow".
+ *
+ * So compute it. One frame is htotal source clocks x vtotal lines, at the source
+ * clock; the x4 between dclk and the source clock cancels out because both come
+ * from the same DT property.
+ *
+ * The margin is deliberately large. This timeout exists only so a wedged
+ * controller cannot hang the thread forever -- it is not a tuning knob, and
+ * expiring it is destructive: the loop `break`s mid-waveform, which leaves the
+ * panel part-driven and accumulates ghosting that survives into the next boot.
+ * Erring generous costs a few seconds once; erring tight corrupts the display.
+ */
+static unsigned int ebc_chunk_timeout_ms(struct rk3026_ebc *ebc, u32 frames)
+{
+	const struct display_timing *t = &ebc->timing;
+	u32 hclks = t->hsync_len.typ + ebc->width / 4 +
+		    t->hback_porch.typ + t->hfront_porch.typ;
+	u32 vlines = t->vsync_len.typ + ebc->height +
+		     t->vback_porch.typ + t->vfront_porch.typ;
+	u64 us = div_u64((u64)hclks * vlines * USEC_PER_SEC,
+			 ebc_pixel_rate(ebc));
+	u64 ms = div_u64(us * frames * EBC_FRAME_TIMEOUT_MARGIN, USEC_PER_MSEC);
+
+	return max_t(u64, ms, EBC_FRAME_TIMEOUT_MIN_MS);
 }
 
 /*
@@ -804,16 +842,17 @@ static void ebc_do_refresh(struct rk3026_ebc *ebc,
 		ktime_t t0 = ktime_get();
 		bool ok;
 
+		unsigned int budget = ebc_chunk_timeout_ms(ebc, n);
+
 		reinit_completion(&ebc->frame_done);
 		ebc_frame_kick(ebc, lut, chunk, n, done + n >= frames);
 		ok = wait_for_completion_timeout(&ebc->frame_done,
-						msecs_to_jiffies(EBC_FRAME_TIMEOUT_MS));
+						msecs_to_jiffies(budget));
 		if (debug_scan)
 			dev_info(ebc->dev,
-				 "scan: chunk %u %u frames %s in %lld ms (expect %u), %d irqs, status %08x\n",
+				 "scan: chunk %u %u frames %s in %lld ms (budget %u), %d irqs, status %08x\n",
 				 chunk, n, ok ? "ended" : "TIMED OUT",
-				 ktime_ms_delta(ktime_get(), t0),
-				 n * 1000 / 85,
+				 ktime_ms_delta(ktime_get(), t0), budget,
 				 atomic_read(&dbg_irqs) - irqs, dbg_last_status);
 		if (!ok) {
 			dev_warn_ratelimited(ebc->dev, "frame timeout\n");
