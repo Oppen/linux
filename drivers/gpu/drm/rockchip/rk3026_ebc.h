@@ -287,6 +287,15 @@ struct rk3026_ebc {
 	unsigned int		queue_head;
 	unsigned int		queue_tail;
 	u32			marker_active;
+	/*
+	 * An update that has been dequeued but not yet driven out. The queue
+	 * indices alone do not describe idleness: the thread bumps @queue_head
+	 * under @queue_lock and only then enters ebc_do_refresh(), so between
+	 * the two the queue reads empty while @blit_lock is still free --
+	 * which is exactly how rk3026_ebc_wait_idle() returned early and let
+	 * the first blit of a boot race the boot RESET (PENDING.md P39).
+	 */
+	bool			refresh_busy;
 
 	/* Serialises writers into @next_virt. */
 	struct mutex		blit_lock;

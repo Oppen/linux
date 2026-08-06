@@ -904,12 +904,14 @@ static int ebc_refresh_thread(void *data)
 		upd = ebc->queue[ebc->queue_head % EBC_UPDATE_QUEUE_LEN];
 		ebc->queue_head++;
 		ebc->marker_active = upd.marker;
+		ebc->refresh_busy = true;
 		spin_unlock(&ebc->queue_lock);
 
 		ebc_do_refresh(ebc, &upd);
 
 		spin_lock(&ebc->queue_lock);
 		ebc->marker_active = 0;
+		ebc->refresh_busy = false;
 		spin_unlock(&ebc->queue_lock);
 		wake_up_all(&ebc->marker_wq);
 	}
@@ -930,19 +932,26 @@ static int ebc_refresh_thread(void *data)
  * wants anyway.
  */
 /*
- * Block until nothing is queued and no waveform is in flight. The thread holds
- * @blit_lock for the whole of an update, so an empty queue plus an uncontended
- * lock means the panel is idle.
+ * Block until nothing is queued and no waveform is in flight.
+ *
+ * ⚠️ "Empty queue plus an uncontended @blit_lock" is NOT idle, and believing
+ * it was is docs/PENDING.md P39's second half: ebc_refresh_thread() bumps
+ * @queue_head under @queue_lock and only then calls ebc_do_refresh(), which is
+ * where @blit_lock is taken. In that window both tests pass while a full
+ * waveform is about to run -- so this returned immediately, the caller's blit
+ * landed in @next_virt, and the boot RESET drove the client's image instead of
+ * white. @refresh_busy closes the window because it is set in the same critical
+ * section that dequeues.
  */
 void rk3026_ebc_wait_idle(struct rk3026_ebc *ebc)
 {
-	bool empty;
+	bool idle;
 
 	for (;;) {
 		spin_lock(&ebc->queue_lock);
-		empty = ebc->queue_head == ebc->queue_tail;
+		idle = ebc->queue_head == ebc->queue_tail && !ebc->refresh_busy;
 		spin_unlock(&ebc->queue_lock);
-		if (empty)
+		if (idle)
 			break;
 		msleep(20);
 	}
@@ -1156,9 +1165,29 @@ static void ebc_crtc_atomic_enable(struct drm_crtc *crtc,
 		}
 	}
 
-	/* Drive the panel to a known white before anything is composed on it. */
+	/*
+	 * Drive the panel to a known white before anything is composed on it.
+	 *
+	 * ⚠️ This memset owns next_virt, so it MUST NOT race a client blit into
+	 * the same buffer -- that is docs/PENDING.md P39: the enabling commit also
+	 * carries the first plane update, and the default commit_tail runs the
+	 * planes FIRST, so the blit landed and was then overwritten white here.
+	 * The first draw of every boot was silently lost.
+	 *
+	 * Two halves, and both are needed:
+	 *
+	 *  - the commit order is reversed (ebc_mode_config_helper_funcs, the _rpm
+	 *    tail), so the CRTC enables before the planes commit;
+	 *  - the RESET is then driven to completion here, so by the time the plane
+	 *    blits, prev is white, next is free, and the client's own update is the
+	 *    next thing the thread sees.
+	 *
+	 * Waiting costs the enabling commit one full RESET (~8 s at 12 MHz), which
+	 * is time the RESET takes regardless; it only moves who blocks for it.
+	 */
 	memset(ebc->next_virt, 0xff, ebc->img_size);
 	rk3026_ebc_queue_update(ebc, &clip, EBC_MODE_RESET, 0, false, 0);
+	rk3026_ebc_wait_idle(ebc);
 	return;
 
 err_epd:
@@ -1242,6 +1271,18 @@ static const struct drm_mode_config_funcs ebc_mode_config_funcs = {
 	.fb_create		= drm_gem_fb_create_with_dirty,
 	.atomic_check		= drm_atomic_helper_check,
 	.atomic_commit		= drm_atomic_helper_commit,
+};
+
+/*
+ * CRTC BEFORE PLANES. The default tail commits planes first, which on the
+ * enabling commit means the client's blit lands in next_virt and is then
+ * memset white by ebc_crtc_atomic_enable() (docs/PENDING.md P39).
+ *
+ * The _rpm tail differs from the default only in that order, and this driver
+ * has no runtime-PM stake in it -- it is being used for the ordering alone.
+ */
+static const struct drm_mode_config_helper_funcs ebc_mode_config_helper_funcs = {
+	.atomic_commit_tail	= drm_atomic_helper_commit_tail_rpm,
 };
 
 DEFINE_DRM_GEM_FOPS(ebc_fops);
@@ -1698,6 +1739,7 @@ static int ebc_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 	drm->mode_config.funcs = &ebc_mode_config_funcs;
+	drm->mode_config.helper_private = &ebc_mode_config_helper_funcs;
 	drm->mode_config.min_width = ebc->width;
 	drm->mode_config.max_width = ebc->width;
 	drm->mode_config.min_height = ebc->height;

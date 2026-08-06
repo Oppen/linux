@@ -771,6 +771,19 @@
 
 	nand@0 {
 		reg = <0>;
+		/*
+		 * Mandatory: rk_nfc_nand_chip_init() rejects the chip with
+		 * -EINVAL when mtd->name is unset
+		 * (rockchip-nand-controller.c:1180).  Observed on hardware
+		 * 2026-08-06 -- the controller DID probe and failed only here.
+		 * Name follows rk3066a-mk808.dts.
+		 *
+		 * PROVEN on hardware the same day: with the label present the scan
+		 * reaches the chip (SanDisk, ID 0x45 0xd7, 4 GiB MLC, page 8192)
+		 * and now fails one layer deeper, on OOB size -- see
+		 * docs/facts/storage.md and PENDING.md P40.
+		 */
+		label = "rk-nand";
 		nand-ecc-mode = "hw";
 		/* SanDisk MLC, ID 45 d7 84 93 72 50: 40bit/1024B, from the FTL's
 		 * NandFlashParaTbl and confirmed against live gNandFlashEccBits. */
