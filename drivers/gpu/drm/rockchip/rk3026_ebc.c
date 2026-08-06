@@ -1394,9 +1394,9 @@ static int ebc_hw_init(struct rk3026_ebc *ebc)
 	 * select -- see the GRF_EBC_SEL_* comment in rk3026_ebc.h.
 	 *
 	 * This driver wrote bit 0 alone until 2026-08-06 and appeared to work,
-	 * because every test reached Linux through `adb reboot` from Android and
-	 * Android leaves 0x300 here. The first cold boot from our own card read
-	 * 0x101 and drew nothing.
+	 * because on those boots the register already held 0x301. On a boot from
+	 * a freshly written card it read 0x101 and drew nothing. ⚠️ What put the
+	 * 0x300 there is NOT established -- not this driver, not U-Boot.
 	 */
 	if (ebc->grf)
 		regmap_write(ebc->grf, GRF_EBC_SEL_REG,

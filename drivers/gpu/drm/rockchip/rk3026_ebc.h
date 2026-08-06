@@ -103,19 +103,29 @@
  * bit 9  LVDS-vs-LVTTL output select.
  *
  * 🔴 Bits 8 and 9 are REQUIRED, measured 2026-08-06. The driver used to write
- * bit 0 alone, and the panel rendered anyway for as long as every test booted
- * via `adb reboot` from Android -- which leaves 0x300 in this register, so we
- * were borrowing it. On the first cold boot from our own card the register read
- * 0x101 and nothing drew; a single `devmem 0x20008150 32 0x03010301` and the
- * same circle appeared. One variable, same boot.
+ * bit 0 alone, and the panel rendered anyway on earlier boots, where this
+ * register read 0x301. On a boot from a freshly written card it read 0x101 and
+ * nothing drew; a single `devmem 0x20008150 32 0x03010301` and the same circle
+ * appeared. One variable, same boot. Proven to be established rather than found
+ * by forcing the register to 0x001, hot-swapping this driver, and reading 0x301
+ * back after probe.
  *
- * ⚠️ This is exactly the class of defect docs/PENDING.md P7 names: a driver that
- * works by inheritance from whatever ran before is not working. Do not "verify"
- * a display fix by rebooting through Android -- it hides precisely this.
+ * ⚠️ WHERE THE 0x300 CAME FROM ON THOSE EARLIER BOOTS IS NOT ESTABLISHED, and a
+ * previous revision of this comment asserted it was Android. That was never
+ * checked and the maintainer had deliberately not been booting Android. What IS
+ * ruled out: this driver (it wrote bit 0 only) and U-Boot (it never references
+ * 0x150 -- grepped). What remains open: persistence from some earlier state
+ * (INDEX records GRF surviving a warm SND reset and being cleared by U-Boot's
+ * FST reset), or a reset default that differs by boot path. Do not repeat the
+ * Android story as if it were the mechanism.
+ *
+ * ⚠️ This is still the class of defect docs/PENDING.md P7 names -- a driver that
+ * works by inheriting state from whatever ran before is not working -- and the
+ * fix is the same whatever the source turns out to be: write the bits.
  *
  * ⚠️ And do not trust an earlier note of mine calling these bits a no-op. They
- * read back already-set on an Android-warm boot, which is why they looked inert;
- * the test could not distinguish "does nothing" from "already done for us".
+ * read back already-set, which is why they looked inert; the test could not
+ * distinguish "does nothing" from "already set by something else".
  */
 #define GRF_EBC_SEL_REG		0x150
 #define GRF_EBC_SEL_BIT		BIT(0)
