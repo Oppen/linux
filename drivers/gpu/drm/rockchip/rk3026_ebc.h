@@ -123,7 +123,40 @@
  * here would run every waveform at a quarter of its intended frame rate.
  */
 #define EBC_PIXEL_RATE		20000000
-#define EBC_DCLK_RATE		(EBC_PIXEL_RATE * 4)
+
+/*
+ * 🔴 dclk is CAPPED AT 12 MHz, and this is a WORKAROUND, not the right value.
+ *
+ * The vendor runs 80 MHz on this silicon. We cannot: measured on hardware
+ * 2026-08-06 with fbpoke's 50 mm `circle`, same boot, same transition, one
+ * variable at a time --
+ *
+ *	12   MHz  ->  a clean disc, correct size and position. Also a legible
+ *		      alphabet, and visible checkers for the first time ever
+ *	26.4 MHz  ->  garbage
+ *	33   MHz  ->  garbage
+ *	44   MHz  ->  garbage
+ *	66   MHz  ->  garbage (what this file used to ask for, via 20 MHz * 4)
+ *
+ * Everything that looked for weeks like a transposition, a stride error or a
+ * per-line phase slip was this: above ~12 MHz the block does not get a line's
+ * worth of pixels in time, so uniform fills survive (every byte identical, so
+ * losing some does not show) while anything with structure smears.
+ *
+ * ⚠️ A 6x shortfall against the vendor is far too large to be tuning, so do NOT
+ * treat this cap as the fix. The suspect is the EBC's AXI master clock:
+ * CLKGATE_CON3 bit 0 is set, gating aclk_lcdc0_src, which is the parent
+ * clk-rk3026.c models aclk_ebc against -- already logged as wrong in
+ * docs/PENDING.md P16, with P8's shared-gate-bit problem beside it. Fix that and
+ * this cap should come off. Until then a refresh costs ~3 s.
+ *
+ * ⚠️ Changing this constant alone may not take effect on a running system:
+ * clk_set_rate() is a no-op when CCF's cached rate already matches what it
+ * believes, so a hand-poked CLKSEL_CON23 survives rmmod/insmod. Verify against
+ * the FRAME TIME in the scan log -- 38 frames take ~3000 ms at 12 MHz and
+ * ~560 ms at 66 -- never against clk_get_rate().
+ */
+#define EBC_DCLK_RATE		12000000
 
 /*
  * EBC work modes. These index the controller's mode dispatch and select both
