@@ -94,9 +94,35 @@
 /* Latch value written to EBC_CONFIG_DONE after each register group. */
 #define EBC_CONFIG_DONE_VAL	0xffff
 
-/* GRF register that selects EBC vs LCDC on the shared pads (bit 0). */
+/*
+ * GRF 0x150 -- /proc/iomem calls this region "rk3026-lvds", and it carries
+ * three bits this driver must ESTABLISH rather than inherit.
+ *
+ * bit 0  EBC vs LCDC on the shared pads.
+ * bit 8  LVDS PLL power-down.
+ * bit 9  LVDS-vs-LVTTL output select.
+ *
+ * 🔴 Bits 8 and 9 are REQUIRED, measured 2026-08-06. The driver used to write
+ * bit 0 alone, and the panel rendered anyway for as long as every test booted
+ * via `adb reboot` from Android -- which leaves 0x300 in this register, so we
+ * were borrowing it. On the first cold boot from our own card the register read
+ * 0x101 and nothing drew; a single `devmem 0x20008150 32 0x03010301` and the
+ * same circle appeared. One variable, same boot.
+ *
+ * ⚠️ This is exactly the class of defect docs/PENDING.md P7 names: a driver that
+ * works by inheritance from whatever ran before is not working. Do not "verify"
+ * a display fix by rebooting through Android -- it hides precisely this.
+ *
+ * ⚠️ And do not trust an earlier note of mine calling these bits a no-op. They
+ * read back already-set on an Android-warm boot, which is why they looked inert;
+ * the test could not distinguish "does nothing" from "already done for us".
+ */
 #define GRF_EBC_SEL_REG		0x150
 #define GRF_EBC_SEL_BIT		BIT(0)
+#define GRF_LVDS_PLL_PD_BIT	BIT(8)
+#define GRF_LVDS_OUT_SEL_BIT	BIT(9)
+#define GRF_EBC_SEL_MASK	(GRF_EBC_SEL_BIT | GRF_LVDS_PLL_PD_BIT | \
+				 GRF_LVDS_OUT_SEL_BIT)
 
 /*
  * GRF pad-mux registers for the eight EBC pads, read back only for reporting.

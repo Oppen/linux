@@ -301,7 +301,7 @@ static void ebc_report_env(struct rk3026_ebc *ebc)
 		regmap_read(ebc->grf, GRF_EBC_SEL_REG, &ebc_sel);
 	}
 	dev_info(ebc->dev,
-		 "scan: grf iomux2b %08x 2c %08x 2d %08x ebc_sel %08x (want aa/ff28/0a/bit0)\n",
+		 "scan: grf iomux2b %08x 2c %08x 2d %08x ebc_sel %08x (want aa/ff28/0a/0x301)\n",
 		 iomux2b, iomux2c, iomux2d, ebc_sel);
 }
 
@@ -1388,10 +1388,19 @@ static int ebc_hw_init(struct rk3026_ebc *ebc)
 	dev_info(ebc->dev, "dclk %lu Hz (CCF's view; check a scan's frame time)\n",
 		 clk_get_rate(ebc->dclk));
 
-	/* Route the shared display pads to EBC rather than LCDC. */
+	/*
+	 * Route the shared display pads to EBC, and put the LVDS block in the
+	 * state the panel needs. All three bits are written, not just the pad
+	 * select -- see the GRF_EBC_SEL_* comment in rk3026_ebc.h.
+	 *
+	 * This driver wrote bit 0 alone until 2026-08-06 and appeared to work,
+	 * because every test reached Linux through `adb reboot` from Android and
+	 * Android leaves 0x300 here. The first cold boot from our own card read
+	 * 0x101 and drew nothing.
+	 */
 	if (ebc->grf)
 		regmap_write(ebc->grf, GRF_EBC_SEL_REG,
-			     (GRF_EBC_SEL_BIT << 16) | GRF_EBC_SEL_BIT);
+			     (GRF_EBC_SEL_MASK << 16) | GRF_EBC_SEL_MASK);
 
 	ebc_set_timing(ebc);
 	ebc_set_window(ebc);
