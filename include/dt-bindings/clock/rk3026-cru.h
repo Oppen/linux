@@ -169,8 +169,17 @@
 /* Display AXI source, exposed so the board can pin its parent and rate. */
 #define ACLK_LCDC1_SRC		86
 
+/*
+ * Display AHB source: the real parent of hclk_ebc and hclk_lcdc1, on
+ * CLKSEL_CON30. Nothing in this port wrote that register until 2026-08-06, so
+ * hclk_ebc ran at whatever the loader left -- slow-mode CPLL / 4 = 6 MHz,
+ * against the vendor's 256 -- and that, not the AXI clock, was what capped
+ * dclk_ebc at 12 MHz.
+ */
+#define HCLK_DISP_PRE		87
+
 /* Number of clocks */
-#define CLK_NR_CLKS		(ACLK_LCDC1_SRC + 1)
+#define CLK_NR_CLKS		(HCLK_DISP_PRE + 1)
 
 /*
  * Soft Resets

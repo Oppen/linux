@@ -842,25 +842,34 @@
 
 	panel-timing {
 		/*
-		 * 🔴 3 MHz, NOT the panel table's 20 MHz, and this is a WORKAROUND.
+		 * 16.5 MHz source clock -> dclk 66 MHz (the driver runs dclk at 4x
+		 * this: four 2-bit pixels per source clock). GPLL is 132 MHz, so
+		 * /2 is the fastest this PLL can give; the vendor's 20 MHz (dclk
+		 * 80) needs CPLL at 560 and is a separate change.
 		 *
-		 * The driver runs dclk at 4x this (four 2-bit pixels per source
-		 * clock), so 3 MHz here means dclk = 12 MHz. Measured on hardware
-		 * 2026-08-06 with fbpoke's 50 mm `circle`, one variable at a time:
-		 * 12 MHz renders a clean disc, a legible alphabet and visible
-		 * checkers; 26.4, 33, 44 and 66 MHz all render garbage. Above
-		 * ~12 MHz the block does not get a line's worth of pixels in time,
-		 * so uniform fills survive and anything with structure smears --
-		 * which is what looked for weeks like a transposition or a stride
-		 * error.
+		 * ⚠️ This was 3 MHz (dclk 12) until 2026-08-06, with a comment
+		 * calling every rate above ~12 MHz garbage and blaming the EBC's
+		 * AXI master clock. Both halves were wrong, and the correction is
+		 * worth keeping because the symptom was real:
 		 *
-		 * ⚠️ The vendor runs 20 MHz here (dclk 80). A 6x shortfall is far
-		 * too large to be tuning, so do NOT treat this as the fix: the
-		 * suspect is the EBC's AXI master clock (docs/PENDING.md P16/P8).
-		 * Raise this back toward 20 MHz once that is fixed, and re-check
-		 * with `circle`. A refresh costs ~3 s meanwhile.
+		 *  - the AXI clock is NOT the limiter. aclk_ebc at 33 MHz with
+		 *    dclk 12 renders a clean circle, while dclk 33 at aclk 132
+		 *    renders garbage -- the configuration with four times LESS AXI
+		 *    clock is the one that works.
+		 *  - the limiter was hclk_ebc, the EBC's AHB slave clock, which
+		 *    ran at 6 MHz because clk-rk3026.c named a parent the hardware
+		 *    does not route and so nothing ever wrote CLKSEL_CON30. At
+		 *    6 MHz the ceiling is between 16.5 and 22 MHz dclk; at 132 MHz,
+		 *    22, 33 and 66 all render cleanly.
+		 *
+		 * Measured on glass, unit 1, one variable per step, with fbpoke's
+		 * 50 mm `circle`. A 38-frame refresh: 3010 ms at dclk 12, 570 ms
+		 * here.
+		 *
+		 * 🔴 This rate depends on clk-rk3026.c parking CLKSEL_CON30 on
+		 * GPLL. Raising it without that is what "renders garbage" meant.
 		 */
-		clock-frequency = <3000000>;
+		clock-frequency = <16500000>;
 		hactive = <1024>;
 		vactive = <758>;
 		hsync-len = <6>;	/* LSL */

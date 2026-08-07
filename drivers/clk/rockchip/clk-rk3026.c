@@ -406,7 +406,31 @@ static struct rockchip_clk_branch rk3026_clk_branches[] __initdata = {
 			RK2928_CLKGATE_CON(9), 10, GFLAGS),
 	GATE(ACLK_LCDC1, "aclk_lcdc1", "aclk_vio1_niu", 0,
 			RK2928_CLKGATE_CON(9), 6, GFLAGS),
-	GATE(HCLK_LCDC1, "hclk_lcdc1", "hclk_peri_src", 0,
+	/*
+	 * The display AHB source, and the parent of both hclk_lcdc1 and
+	 * hclk_ebc. It was not modelled at all until 2026-08-06, and both were
+	 * parented to hclk_peri_src instead -- a clock the hardware does not
+	 * route here. Nothing then ever wrote CLKSEL_CON30, so hclk_ebc ran at
+	 * whatever the loader left it: mux on CPLL, which sits in slow mode at
+	 * 24 MHz, divided by 4 = 6 MHz, against the vendor's 256.
+	 *
+	 * That was the dclk_ebc ceiling. Measured on hardware the same day, one
+	 * variable, eyes on the glass: at hclk 6 MHz a 22 MHz dclk renders
+	 * garbage and 16.5 MHz is the most that renders; with this register on
+	 * GPLL/1 = 132 MHz, 22, 33 and 66 MHz all render a clean circle. 66 MHz
+	 * takes a 38-frame refresh from 3010 ms to 570 ms.
+	 *
+	 * Parent and divider from the vendor kernel's own clk table
+	 * (re-workspace/evidence/boox-zImage): hclk_disp_pre's struct clk carries
+	 * reg CRU+0xbc = CLKSEL_CON30, mask 0x1f shift 8, mux mask 1 shift 15
+	 * over { codec_pll, general_pll }, gate CLKGATE_CON(0) bit 11 -- and
+	 * hclk_ebc's own recalc pointer is NULL, i.e. it is a pure gate that
+	 * takes its parent's rate with no divider of its own.
+	 */
+	COMPOSITE(HCLK_DISP_PRE, "hclk_disp_pre", mux_pll_src_cpll_gpll_p, 0,
+			RK2928_CLKSEL_CON(30), 15, 1, MFLAGS, 8, 5, DFLAGS,
+			RK2928_CLKGATE_CON(0), 11, GFLAGS),
+	GATE(HCLK_LCDC1, "hclk_lcdc1", "hclk_disp_pre", 0,
 			RK2928_CLKGATE_CON(9), 5, GFLAGS),
 	COMPOSITE(DCLK_LCDC1, "dclk_lcdc1", mux_pll_src_cpll_gpll_p, 0,
 			RK2928_CLKSEL_CON(28), 0, 1, MFLAGS, 8, 8, DFLAGS,
@@ -457,7 +481,8 @@ static struct rockchip_clk_branch rk3026_clk_branches[] __initdata = {
 	 * parent is off, while the hardware bit it actually needs is CON9 b10.
 	 */
 	FACTOR(ACLK_EBC, "aclk_ebc", "aclk_vio1_niu", 0, 1, 1),
-	GATE(HCLK_EBC, "hclk_ebc", "hclk_peri_src", 0,
+	/* Parent is the display AHB source, NOT hclk_peri_src -- see above. */
+	GATE(HCLK_EBC, "hclk_ebc", "hclk_disp_pre", 0,
 			RK2928_CLKGATE_CON(9), 9, GFLAGS),
 
 	/*
@@ -700,6 +725,30 @@ static void __init rk3026_clk_init(struct device_node *np)
 	 */
 	writel_relaxed(HIWORD_UPDATE(0x8080, 0xffff, 0),
 		       reg_base + RK2928_CLKSEL_CON(31));
+
+	/*
+	 * Park the display AHB source on GPLL at /1, for the same reason and
+	 * with the same before-registration timing as CON31 above.
+	 *
+	 * CLKSEL_CON30 holds hclk_disp_pre: bit 15 mux (0=CPLL, 1=GPLL),
+	 * bits[12:8] divider. Nothing in this port had ever written it, so it
+	 * held the loader's value -- CPLL, which is in slow mode at 24 MHz,
+	 * divided by 4 = 6 MHz -- and hclk_ebc inherited that. It is the EBC's
+	 * AHB slave clock and it was the dclk ceiling: at 6 MHz the panel
+	 * renders garbage above ~16.5 MHz dclk, and at 132 MHz it renders
+	 * cleanly at 66 (measured on glass, 2026-08-06, one variable).
+	 *
+	 * ⚠️ Only bits 15 and [12:8] are masked, deliberately. CON31's write
+	 * above masks all 16 bits because both of its fields are ours; CON30's
+	 * low byte is NOT identified in any binary we hold, and clearing an
+	 * unknown field is not a thing to do blind.
+	 *
+	 * ⚠️ GPLL is 132 MHz here against the vendor's 768, so this yields 132
+	 * and not the vendor's 256. That is enough for dclk 66; the vendor's
+	 * dclk 80 needs CPLL at 560, which is a separate change.
+	 */
+	writel_relaxed(HIWORD_UPDATE(0x8000, 0x9f00, 0),
+		       reg_base + RK2928_CLKSEL_CON(30));
 
 	clk_nr_clks = rockchip_clk_find_max_clk_id(rk3026_clk_branches,
 						    ARRAY_SIZE(rk3026_clk_branches)) + 1;
