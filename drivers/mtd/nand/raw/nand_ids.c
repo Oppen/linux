@@ -44,6 +44,25 @@ struct nand_flash_dev nand_flash_ids[] = {
 	{"TC58NVG6D2 64G 3.3V 8-bit",
 		{ .id = {0x98, 0xde, 0x94, 0x82, 0x76, 0x56, 0x04, 0x20} },
 		  SZ_8K, SZ_8K, SZ_2M, 0, 8, 640, NAND_ECC_INFO(40, SZ_1K) },
+	/*
+	 * BOOX C67ML (RK3026). Fitted part SDTNQFAMA-004G, ID 45 d7 84 93 72 50.
+	 * Same SDTN?_AMA family as the two 64G siblings below and geometry-identical
+	 * to them except for capacity: 16 KiB page, 4 MiB erase, 40-bit/1024 B ECC,
+	 * 1060 blocks (4240 MiB raw) against their 2048.
+	 *
+	 * Page, erase, ECC and block count are dev-tier, read out of the vendor FTL's
+	 * live state (docs/re/DRV-RKNAND-FTL.md). The OOB size is NOT: the vendor
+	 * carries no spare field anywhere, its own driver never learns one, and no
+	 * datasheet for this part could be found. 1280 is taken from the siblings and
+	 * clears the hard floor of 16 x (70 parity + 4 meta) = 1184. Confirming it is
+	 * PENDING.md P42 -- treat as unproven until a page reads clean on hardware.
+	 *
+	 * Without this entry nand_decode_ext_id() reads ID byte 3 (0x93) as an 8 KiB
+	 * page with 128 B OOB, which cannot hold the ECC and fails the probe -EINVAL.
+	 */
+	{"SDTNQFAMA 4G 3.3V 8-bit",
+		{ .id = {0x45, 0xd7, 0x84, 0x93, 0x72, 0x50} },
+		  SZ_16K, SZ_4K, SZ_4M, 0, 6, 1280, NAND_ECC_INFO(40, SZ_1K) },
 	{"SDTNQGAMA 64G 3.3V 8-bit",
 		{ .id = {0x45, 0xde, 0x94, 0x93, 0x76, 0x57} },
 		  SZ_16K, SZ_8K, SZ_4M, 0, 6, 1280, NAND_ECC_INFO(40, SZ_1K) },

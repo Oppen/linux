@@ -158,8 +158,15 @@ int nand_onfi_detect(struct nand_chip *chip)
 
 	/* Try ONFI for unknown chip or LP */
 	ret = nand_readid_op(chip, 0x20, id, sizeof(id));
+	/* BOOX P42: this probe fails silently, and whether it fails at all is
+	 * the difference between reading the chip's real geometry and guessing
+	 * it. Print the verdict once. Drop before upstreaming.
+	 */
+	pr_info("BOOX-ONFI: readid(0x20) ret=%d id=%02x %02x %02x %02x (ONFI = 4f 4e 46 49)\n",
+		ret, (u8)id[0], (u8)id[1], (u8)id[2], (u8)id[3]);
 	if (ret || strncmp(id, "ONFI", 4))
 		return 0;
+	pr_info("BOOX-ONFI: chip IS ONFI -- parameter page follows\n");
 
 	/* ONFI chip: allocate a buffer to hold its parameter page */
 	pbuf = kzalloc((sizeof(*pbuf) * ONFI_PARAM_PAGES), GFP_KERNEL);
