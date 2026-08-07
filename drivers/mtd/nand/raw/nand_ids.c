@@ -59,10 +59,39 @@ struct nand_flash_dev nand_flash_ids[] = {
 	 *
 	 * Without this entry nand_decode_ext_id() reads ID byte 3 (0x93) as an 8 KiB
 	 * page with 128 B OOB, which cannot hold the ECC and fails the probe -EINVAL.
+	 *
+	 * 🔴 NAND_SKIP_BBTSCAN IS LOAD-BEARING, NOT AN OPTIMISATION. Proven on
+	 * hardware 2026-08-07: rockchip-nand-controller.c:1171 sets
+	 *   chip->bbt_options = NAND_BBT_USE_FLASH | NAND_BBT_NO_OOB
+	 * unconditionally, in the driver, not from DT. So a probe that finds no
+	 * on-flash BBT *writes one*. On a chip still holding vendor data that is a
+	 * destructive write nobody asked for. It is also guaranteed to write a WRONG
+	 * table here: the vendor randomizes every page outside the 16 reserved
+	 * blocks, mainline disables the randomizer unconditionally, so the scan sees
+	 * ECC failures everywhere and marked 712 of 1024 blocks bad -- block 0
+	 * included. The only reason the first boot did not write was that it then
+	 * found no good block to put the table in and bailed -ENOSPC. Luck, not
+	 * design. Skipping the scan skips nand_create_bbt() entirely
+	 * (nand_base.c:6477), which is what makes this chip safe to probe read-only.
+	 *
+	 * 🔴 chipsize MUST BE A POWER OF TWO. The chip is really 1060 blocks x
+	 * 4 MiB = 4240 MiB, and declaring that breaks every read: nand_base.c:5282
+	 * does chip_shift = ffs((unsigned)targetsize) - 1, and 4240 MiB truncated to
+	 * 32 bits is 0x09000000, whose lowest set bit is 24 -- so chip_shift becomes
+	 * 24 instead of 32, chipnr = from >> chip_shift is nonzero for any offset at
+	 * or above 16 MiB, and every op then dies on WARN_ON(op->cs >= ntargets)
+	 * (internals.h:139) with -EINVAL WITHOUT BEING ISSUED. The buffer is left
+	 * untouched, so nanddump prints 0xFF and it reads exactly like an erased
+	 * chip. Proven on hardware 2026-08-07; cost an hour and a scare.
+	 *
+	 * So: SZ_4K, and the top 36 blocks are invisible to mainline. That 36 is
+	 * 1060 & 0xff = the vendor FTL's own c_ftl_nand_ext_blk_pre_plane. Both
+	 * mainline siblings declare SZ_8K for the same power-of-two reason.
 	 */
 	{"SDTNQFAMA 4G 3.3V 8-bit",
 		{ .id = {0x45, 0xd7, 0x84, 0x93, 0x72, 0x50} },
-		  SZ_16K, SZ_4K, SZ_4M, 0, 6, 1280, NAND_ECC_INFO(40, SZ_1K) },
+		  SZ_16K, SZ_4K, SZ_4M, NAND_SKIP_BBTSCAN, 6, 1280,
+		  NAND_ECC_INFO(40, SZ_1K) },
 	{"SDTNQGAMA 64G 3.3V 8-bit",
 		{ .id = {0x45, 0xde, 0x94, 0x93, 0x76, 0x57} },
 		  SZ_16K, SZ_8K, SZ_4M, 0, 6, 1280, NAND_ECC_INFO(40, SZ_1K) },
