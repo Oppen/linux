@@ -88,47 +88,31 @@
 		 * that pin relaxed, and that needs the RK292X AVDD max of
 		 * 1.32 V resolved against a part measured at 1.45.
 		 *
-		 * 🔴🔴 AND YET THE VALUE BELOW IS 1200000, WHICH IS WRONG AND IS
-		 * DELIBERATE. DO NOT "FIX" IT.
+		 * ✅ 1450000 IS RESTORED, and it is safe ONLY because cpufreq-dt
+		 * is now disabled in buildroot/board/boox-c67ml/linux.fragment.
 		 *
-		 * The rail measures 1.45 V, so this figure is false -- and it is
-		 * load-bearing anyway, as an INTERLOCK. 1450000 was tried on
-		 * hardware 2026-08-08 and THE BOARD HUNG: U-Boot reached its
-		 * prompt, `boot` jumped, and nothing followed -- no heartbeat
-		 * LED, no ttyGS0, no adb. Only this value changed between that
-		 * card and the one before it, which booted.
+		 * History, because this line has hung the board once: 1450000 was
+		 * shipped on 2026-08-08 with cpufreq-dt still enabled and the board
+		 * went dead -- U-Boot prompt fine, `boot` jumped, then no heartbeat,
+		 * no ttyGS0, no adb. Not the voltage: a satisfiable OPP let
+		 * cpufreq-dt probe for the FIRST TIME in the life of this port,
+		 * registering a policy and calling clk_set_rate on ARMCLK -- APLL
+		 * reprogramming through clk-rk3026.c code no kernel here had ever
+		 * executed. The global_timer note below already warned that things
+		 * get worse "once cpufreq-dt works and armclk actually moves".
 		 *
-		 * Why a "correct" voltage hangs: with 1200000 the OPP core
-		 * REJECTS the point against the bound regulator, cpufreq-dt gets
-		 * an empty table and refuses to probe. With 1450000 the point is
-		 * satisfiable, so cpufreq-dt probes for the FIRST TIME EVER on
-		 * this port -- registering a policy and calling clk_set_rate on
-		 * ARMCLK, i.e. reprogramming APLL through clk-rk3026.c code no
-		 * kernel has ever executed here. The hang is in that newly
-		 * reachable path, not in the voltage.
+		 * 🔴 SO THE TWO ARE A PAIR. Re-enabling CONFIG_CPUFREQ_DT while this
+		 * says 1450000 re-hangs the board. If cpufreq-dt is ever wanted, the
+		 * ARMCLK set_rate path has to be made to work first (P59), and that
+		 * is a clk-driver job, not a dts one.
 		 *
-		 * ⚠️ The reasoning that shipped 1450000 was wrong in a specific,
-		 * repeatable way: it checked that the VOLTAGE was a no-op and did
-		 * not ask what ELSE becomes reachable once an OPP is satisfiable.
-		 * "The value it programs is the value already there" says nothing
-		 * about a code path that only runs when the value is accepted.
-		 *
-		 * 🔴 THIS FILE ALREADY WARNED ABOUT IT. The global_timer note
-		 * below says, of exporting CORE_PERI: "it gets worse once
-		 * cpufreq-dt works and armclk actually moves." That warning was
-		 * ~110 lines further down this same file and was not read before
-		 * the OPP was edited -- a straight breach of the rule against
-		 * editing a file one does not hold whole. The cost was one card
-		 * and one dead boot.
-		 *
-		 * 🎯 The real fix is to disable cpufreq-dt and then restore
-		 * 1450000, so the dts stops lying without arming that path --
-		 * PENDING P59. Until that lands, changing this line re-hangs the
-		 * board.
+		 * ⚠️ The lesson generalises and is in INSTRUMENTATION D13: checking
+		 * that a value programs what is already there says nothing about the
+		 * code that becomes REACHABLE once the value is accepted.
 		 */
 		opp-912000000 {
 			opp-hz = /bits/ 64 <912000000>;
-			opp-microvolt = <1200000>;
+			opp-microvolt = <1450000>;
 			opp-suspend;
 		};
 	};
