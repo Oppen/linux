@@ -941,14 +941,12 @@ static void ebc_do_refresh(struct rk3026_ebc *ebc,
 	 * skipping that would leave whatever the previous OS left on the glass.
 	 * Keying off `mode` instead would let force_mode disable the boot clear.
 	 *
-	 * ⚠️ @prev_unknown is exempt for the same reason RESET is: the skip is a
-	 * decision made from @prev_virt, and the flag says @prev_virt is not
-	 * evidence. Skipping there is precisely the fault (docs/PENDING.md P62) --
-	 * the update that would repair the glass is the one thrown away. This
-	 * exemption is NOT a weakening of the skip: it applies only after a
-	 * waveform has already failed to complete, and the zero-diff case that
-	 * P29 measured -- fbcon redrawing an identical image forever -- still
-	 * skips, because a successful refresh clears the flag.
+	 * ⚠️ DO NOT DROP the @prev_unknown exemption. The skip is a decision made
+	 * from @prev_virt, and the flag says @prev_virt is not evidence; without
+	 * the exemption an aborted waveform makes the draw that would repair the
+	 * glass the one thrown away, and the panel is unreachable from userspace.
+	 * It does not weaken the skip -- a successful refresh clears the flag, so
+	 * P29's case (fbcon redrawing one image forever) still skips.
 	 */
 	if (!ebc_report_image(ebc) && upd->mode != EBC_MODE_RESET &&
 	    !ebc->prev_unknown) {
@@ -1001,11 +999,12 @@ static void ebc_do_refresh(struct rk3026_ebc *ebc,
 		debug_scan--;
 
 	/*
-	 * What was driven in is now what the panel shows -- and this stays
-	 * UNCONDITIONAL. Making it conditional on success would leave @prev_virt
-	 * holding a still older image, which is just as false and carries no mark
-	 * saying so; @prev_unknown is what records that the copy cannot be
-	 * trusted, and the next draw acts on it.
+	 * What was driven in is now what the panel shows.
+	 *
+	 * ⚠️ STAYS UNCONDITIONAL. Making it conditional on success looks like the
+	 * fix and is not: @prev_virt would then hold a still older image, equally
+	 * false and carrying no mark saying so. @prev_unknown is the mark, and the
+	 * next draw acts on it.
 	 */
 	memcpy(ebc->prev_virt, ebc->next_virt, ebc->img_size);
 	mutex_unlock(&ebc->blit_lock);
