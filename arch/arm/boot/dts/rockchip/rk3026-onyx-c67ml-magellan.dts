@@ -181,12 +181,20 @@
 	 * KEY_PAGEDOWN (109) and KEY_F1 (59) all press and release cleanly,
 	 * so the 3.2 V rescale did not break the ladder.
 	 *
-	 * 🔴 KEY_UP (103) NEVER FIRES, and the maintainer reports those are
-	 * all the keys the device has.  Either `up` is vestigial in the vendor
-	 * table this was copied from, or its threshold is unreachable -- raw
-	 * 11 is 34 mV, ~1% of full scale, which is where an idle or floating
-	 * reading lives.  Do not delete the entry on suspicion: read
-	 * in_voltage3_raw while pressing every button first.
+	 * ⚠️ KEY_UP (103) did not fire, and that is MECHANICAL, not a
+	 * threshold fault.  `up` is one direction of a five-contact
+	 * directional button, and the board was out of its chassis: the rocker
+	 * floats with no backing, so the up contact is hard to actuate.
+	 *
+	 * The same capture shows a release of one code and a press of another
+	 * at the SAME timestamp (104->109, 158->104, 109->104) -- the ADC
+	 * sliding through intermediate ladder voltages as a marginal contact
+	 * opens.  One press, two keys.  Wrong thresholds do not do that.
+	 *
+	 * 🔴 So key testing on an unmounted board does not test these values.
+	 * Do NOT adjust a threshold, add debounce, or delete the `up` entry on
+	 * the strength of it -- that is tuning against a test artifact.
+	 * Re-test with the board mounted.
 	 *
 	 * NB the stock SARADC platform_data declares 3300 mV, but that is its
 	 * default before ratiometric self-calibration; the vendor driver then
