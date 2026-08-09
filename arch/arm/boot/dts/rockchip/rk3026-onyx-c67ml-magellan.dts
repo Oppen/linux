@@ -90,10 +90,13 @@
 		 *
 		 * CONSOLE ONLY, and deliberately: with record-size 0 there are
 		 * no dump zones ahead of it, so the console ring starts at the
-		 * base address and `md.b 0x64100000` at the U-Boot prompt reads
-		 * it directly -- a persistent_ram header, then plain text. Give
-		 * it dump records and the console zone moves to an offset that
-		 * has to be recomputed every time the sizes change.
+		 * base address.  Read it with `pstore display console` at the
+		 * U-Boot prompt -- CONFIG_CMD_PSTORE is on and already carries
+		 * these addresses (HOW-TO section 11).  NOT `md.b`: that dumps
+		 * the raw region in address order, header included, so a wrapped
+		 * ring reads as garbage in the middle.  Give it dump records and
+		 * the console zone moves to an offset that has to be recomputed
+		 * every time the sizes change.
 		 *
 		 * No no-map: same reasoning as boox-log above. Reserved keeps
 		 * the allocator off it, and staying in the linear map avoids
@@ -174,7 +177,16 @@
 	 * by the modelled vref, so the old 3.0 pair was self-consistent and
 	 * worked, and this 3.2 pair is self-consistent and should behave
 	 * identically.  Change one alone and every key shifts 6.7%.
-	 * ⚠️ UNPROVEN on hardware -- press each key on the next card.
+	 * ✅ TESTED 2026-08-08 on unit 2: KEY_BACK (158), KEY_PAGEUP (104),
+	 * KEY_PAGEDOWN (109) and KEY_F1 (59) all press and release cleanly,
+	 * so the 3.2 V rescale did not break the ladder.
+	 *
+	 * 🔴 KEY_UP (103) NEVER FIRES, and the maintainer reports those are
+	 * all the keys the device has.  Either `up` is vestigial in the vendor
+	 * table this was copied from, or its threshold is unreachable -- raw
+	 * 11 is 34 mV, ~1% of full scale, which is where an idle or floating
+	 * reading lives.  Do not delete the entry on suspicion: read
+	 * in_voltage3_raw while pressing every button first.
 	 *
 	 * NB the stock SARADC platform_data declares 3300 mV, but that is its
 	 * default before ratiometric self-calibration; the vendor driver then
