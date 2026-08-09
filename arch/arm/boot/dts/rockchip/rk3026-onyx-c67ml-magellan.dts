@@ -925,6 +925,9 @@
 	 *
 	 * Waveform: /lib/firmware/rockchip/rk3026-c67ml.rkf — this unit's own
 	 * container, rkf v1.0.110, 75708 B, dumped from the live waveform staging
+ * buffer.  NB the DRIVER prints this as "rkf:v1.0.11" (boot log 2026-08-08)
+ * -- fewer characters of the same version field, not a different container:
+ * the byte count and the panel name both match.  Do not "correct" either.
 	 * buffer.  The earlier rk3026-c67ml.wbf was a different unit's v1.0.102:
 	 * trimmed, stale weight table, mode 9 offset table zeroed.
 	 */

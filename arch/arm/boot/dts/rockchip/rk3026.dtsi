@@ -63,10 +63,34 @@
 		/* Live: APLL = 912 MHz (CRU APLL_CON0/CON1 = 0x204c/0x1441 =>
 		 * 24 MHz * 76 / (1*2*1)) with clk_core divider 1, and the vendor
 		 * cpufreq table holds this single point
-		 * (scaling_available_frequencies = "912000"). */
+		 * (scaling_available_frequencies = "912000").
+		 *
+		 * 1.45 V is MEASURED at the VDD_ARM ICT pad (1.448/1.446, unit 2,
+		 * 2026-08-08), not chosen. It said 1200000 until then, from the
+		 * same unsourced 1.2 V figure the board dts carried for vdd_arm.
+		 *
+		 * 🔴 That mismatch was INVISIBLE until an act8931 regulator
+		 * actually bound (P13a). With no regulator, nothing checked the
+		 * OPP and cpufreq-dt merely deferred (-517). With one, the OPP
+		 * core checks it against the rail and rejects it:
+		 *
+		 *   _opp_supported_by_regulators: OPP minuV: 1200000 maxuV:
+		 *     1200000, not supported by regulator
+		 *   cpu cpu0: _opp_add: OPP not supported by regulators (912000000)
+		 *   cpu cpu0: OPP table can't be empty
+		 *   probe of cpufreq-dt returned 19
+		 *
+		 * So the regulator did not break cpufreq-dt; it exposed a wrong
+		 * voltage that had been unchecked for the life of the port.
+		 *
+		 * ⚠️ vdd_arm is pinned min=max=1450000, so this is the ONLY
+		 * voltage an OPP here can name. A real multi-point table needs
+		 * that pin relaxed, and that needs the RK292X AVDD max of
+		 * 1.32 V resolved against a part measured at 1.45.
+		 */
 		opp-912000000 {
 			opp-hz = /bits/ 64 <912000000>;
-			opp-microvolt = <1200000>;
+			opp-microvolt = <1450000>;
 			opp-suspend;
 		};
 	};
