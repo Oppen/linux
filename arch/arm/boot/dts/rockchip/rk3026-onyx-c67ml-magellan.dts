@@ -327,7 +327,16 @@
 			232 233 234 235 236 237 238 239
 			240 241 242 243 244 245 246 247
 			248 249 250 251 252 253 254 255>;
-		default-brightness-level = <128>;
+		/*
+		 * 0, so a boot leaves the front light dark.  128 was noticeably
+		 * ON at first light on 2026-08-09 (25% duty at 64 and full at 255
+		 * both confirmed on the glass) -- the pad had been dark before this
+		 * driver existed, so a nonzero default TURNS THE LIGHT ON rather
+		 * than restoring a prior state.  The property is applied at boot:
+		 * 128 lit the panel immediately on that card, before any sysfs
+		 * write.  Unproven is only whether 0 is fully off or very dim.
+		 */
+		default-brightness-level = <0>;
 		/*
 		 * No enable GPIO.  rk29_backlight_io_init is only iomux_set(0xd21)
 		 * -- it touches no GPIO -- and gpio0 27 (155) is the CYTTSP reset
