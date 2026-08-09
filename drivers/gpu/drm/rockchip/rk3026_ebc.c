@@ -271,6 +271,32 @@ module_param(win_vir, uint, 0644);
 MODULE_PARM_DESC(win_vir, "override WIN_VIR's low half in pixels (0 = panel width)");
 
 /*
+ * DIAGNOSTIC, REVERT ME. Provoke the abort that docs/PENDING.md P62 repairs.
+ *
+ * P62's recovery is unreachable by every other means: the frame budget is
+ * DERIVED from the panel timings so there is no way to make it too small, and
+ * the interruptible wait in rk3026_ebc_wait_marker() aborts a caller's wait
+ * rather than the drive. Without this the repair path can only be reasoned
+ * about, and a repair nobody has seen run is a repair nobody has tested.
+ *
+ * Cuts the budget of the next N chunks to 1 ms, so wait_for_completion_timeout()
+ * genuinely expires: same code path, same `break`, same fall-through into the
+ * unconditional memcpy. Nothing is faked.
+ *
+ * 🔴 An abort leaves the panel MID-WAVEFORM, which is the cumulative ghosting
+ * this driver otherwise works hard to avoid. Set it once, to a small number, to
+ * take a verdict -- never leave it armed.
+ *
+ * ⚠️ Reading the result: the aborted scan's frame-end interrupt arrives while
+ * the NEXT waveform is being set up, so it can complete that waveform's first
+ * chunk early. A chunk that reports "ended in 0 ms" is that stale interrupt, not
+ * a scan. Judge the recovery by its chunk durations, not by the word "ended".
+ */
+static unsigned int debug_timeout;
+module_param(debug_timeout, uint, 0644);
+MODULE_PARM_DESC(debug_timeout, "force the next N chunks to time out (0 = off); provokes P62's abort");
+
+/*
  * Bytes of the target image that differ from what the panel is believed to
  * show, and the value the skip decision in ebc_do_refresh() is made on.
  *
@@ -787,6 +813,12 @@ static bool ebc_drive(struct rk3026_ebc *ebc, const u8 *lut, u32 frames,
 		bool ok;
 
 		unsigned int budget = ebc_chunk_timeout_ms(ebc, n);
+
+		/* DIAGNOSTIC: make the wait expire for real. See debug_timeout. */
+		if (debug_timeout) {
+			debug_timeout--;
+			budget = 1;
+		}
 
 		reinit_completion(&ebc->frame_done);
 		ebc_frame_kick(ebc, lut, chunk, n, done + n >= frames);
