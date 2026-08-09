@@ -751,84 +751,28 @@ void rk3026_ebc_blit_xrgb8888(struct rk3026_ebc *ebc, const void *src,
 	}
 }
 
-/* Drive one queued update onto the panel. Runs only on the refresh thread. */
-static void ebc_do_refresh(struct rk3026_ebc *ebc,
-			   const struct rk3026_ebc_update *upd)
+/**
+ * ebc_drive - run one whole waveform, and own the "is prev true?" flag
+ * @ebc: controller
+ * @lut: packed LUT for @mode, @frames frames of EBC_LUT_FRAME_BYTES
+ * @frames: frames in the waveform
+ * @mode: EBC work mode, for the DSP_CTRL class
+ *
+ * Returns true only if every frame was driven.
+ *
+ * @prev_unknown is set here and cleared in exactly ONE place -- the successful
+ * exit below. That asymmetry is the whole design (docs/PENDING.md P62): a
+ * refresh that ends any other way, including one added later by someone who
+ * never read this comment, leaves the flag set without having to be listed
+ * anywhere. Do not "improve" this into a set of clears on the known failure
+ * paths; the failure that matters is the path not yet written.
+ */
+static bool ebc_drive(struct rk3026_ebc *ebc, const u8 *lut, u32 frames,
+		      u32 mode)
 {
-	u32 frames, done = 0, chunk = 0;
-	const u8 *lut;
-	int temp;
-	u32 mode = upd->mode;
+	u32 done = 0, chunk = 0;
 
-	if (!ebc->waveform)
-		return;
-
-	/* DIAGNOSTIC: drive a different mode class with the same data and scan. */
-	if (force_mode >= 0 && force_mode <= EBC_MODE_MAX)
-		mode = force_mode;
-
-	temp = upd->temp_valid ? upd->temp : ebc_read_temp(ebc);
-	if (temp > EBC_TEMP_MAX)
-		temp = EBC_TEMP_FALLBACK;
-
-	/*
-	 * A direct mode has no LUT of its own; fall back to the update's own mode
-	 * for the scan data so the DSP_CTRL class is the only thing that changed.
-	 */
-	lut = rk3026_ebc_waveform_lut(ebc->waveform, mode, temp, &frames);
-	if (!lut && mode != upd->mode)
-		lut = rk3026_ebc_waveform_lut(ebc->waveform, upd->mode, temp, &frames);
-	if (!lut) {
-		if (debug_scan)
-			dev_info(ebc->dev, "scan: no LUT for mode %u at %d C\n",
-				 mode, temp);
-		return;
-	}
-
-	if (debug_scan) {
-		dev_info(ebc->dev,
-			 "scan: mode %u (update asked %u) temp %d C, %u frames, clip %d,%d-%d,%d\n",
-			 mode, upd->mode, temp, frames, upd->clip.x1, upd->clip.y1,
-			 upd->clip.x2, upd->clip.y2);
-		ebc_report_env(ebc);
-	}
-
-	/*
-	 * The target image must not move while the controller is scanning it,
-	 * so writers are held off for the whole waveform.
-	 */
-	mutex_lock(&ebc->blit_lock);
-
-	/*
-	 * Nothing changed? Then do not drive the panel.
-	 *
-	 * This is not an optimisation, it is a correctness and wear fix. Every
-	 * update arrives here TWICE: FBIOPAN_DISPLAY alone produces two atomic
-	 * commits through drm_fb_helper's fbdev emulation (measured 2026-08-06 --
-	 * skipping the client's msync changes nothing), and ebc_plane_atomic_update()
-	 * queues a full-panel refresh for each without asking whether the pixels
-	 * moved. So the second scan runs a complete waveform with prev == next.
-	 *
-	 * A GC16 waveform with identical prev and next is NOT a no-op: it still
-	 * runs its whole flash sequence, so it re-shows the previous image and
-	 * settles back. At 12 MHz that is a visible three-second replay after
-	 * every single draw, which is what "the previous image comes back" was.
-	 * Left alone it is also continuous wear -- fbcon's cursor blink drove a
-	 * 38-frame full waveform every ~1.1 s indefinitely (docs/PENDING.md P29).
-	 *
-	 * ⚠️ EBC_MODE_RESET is exempt, and the test is on the UPDATE's own mode,
-	 * not the possibly-forced one. The boot-time clear legitimately has
-	 * prev == next == white: the controller indexes its LUT by (prev, next),
-	 * so the driver must MAKE the panel white rather than assume it is, and
-	 * skipping that would leave whatever the previous OS left on the glass.
-	 * Keying off `mode` instead would let force_mode disable the boot clear.
-	 */
-	if (!ebc_report_image(ebc) && upd->mode != EBC_MODE_RESET) {
-		if (debug_scan)
-			dev_info(ebc->dev, "scan: skipped, image identical to prev\n");
-		mutex_unlock(&ebc->blit_lock);
-		return;
-	}
+	ebc->prev_unknown = true;
 
 	ebc_set_dsp_ctrl(ebc, mode);
 	ebc_set_image_addr(ebc, 0, 0);
@@ -865,10 +809,172 @@ static void ebc_do_refresh(struct rk3026_ebc *ebc,
 	if (debug_scan) {
 		ebc_report_regs(ebc, "done");
 		dev_info(ebc->dev, "scan: %u of %u frames driven\n", done, frames);
-		debug_scan--;
 	}
 
-	/* What was driven in is now what the panel shows. */
+	if (done < frames)
+		return false;
+
+	ebc->prev_unknown = false;
+	return true;
+}
+
+/**
+ * ebc_recover_panel - drive the glass back to a state @prev_virt can describe
+ * @ebc: controller
+ * @temp: panel temperature, already clamped
+ *
+ * A RESET waveform reads NEITHER image. rkf_expand_reset() fills every one of a
+ * frame's 16 words -- the index is the new grey -- with the same phase *
+ * 0x55555555, so all four old-grey fields carry that phase too: the whole panel
+ * is driven through one fixed phase sequence with the pixel data irrelevant.
+ *
+ * That is what makes this repair cheap and content-preserving. It needs no third
+ * buffer and no MST reprogramming (WIN_MST0/1 are shadowed, so a per-pass swap
+ * would land on the wrong pass anyway); @next_virt keeps the caller's image
+ * untouched through the RESET and is drawn immediately afterwards from a @prev
+ * that is now true.
+ *
+ * White is the state a RESET lands on -- the same assumption
+ * ebc_crtc_atomic_enable() already makes when it memsets @next_virt to 0xff for
+ * the boot clear.
+ */
+static void ebc_recover_panel(struct rk3026_ebc *ebc, int temp)
+{
+	const u8 *lut;
+	u32 frames;
+
+	lut = rk3026_ebc_waveform_lut(ebc->waveform, EBC_MODE_RESET, temp,
+				      &frames);
+	if (!lut) {
+		dev_warn_ratelimited(ebc->dev,
+				     "panel state unknown and no RESET waveform at %d C\n",
+				     temp);
+		return;
+	}
+
+	dev_warn(ebc->dev, "panel state unknown, clearing with %u RESET frames\n",
+		 frames);
+
+	if (ebc_drive(ebc, lut, frames, EBC_MODE_RESET))
+		memset(ebc->prev_virt, 0xff, ebc->img_size);
+}
+
+/* Drive one queued update onto the panel. Runs only on the refresh thread. */
+static void ebc_do_refresh(struct rk3026_ebc *ebc,
+			   const struct rk3026_ebc_update *upd)
+{
+	u32 frames;
+	const u8 *lut;
+	int temp;
+	u32 mode = upd->mode;
+
+	if (!ebc->waveform)
+		return;
+
+	/* DIAGNOSTIC: drive a different mode class with the same data and scan. */
+	if (force_mode >= 0 && force_mode <= EBC_MODE_MAX)
+		mode = force_mode;
+
+	temp = upd->temp_valid ? upd->temp : ebc_read_temp(ebc);
+	if (temp > EBC_TEMP_MAX)
+		temp = EBC_TEMP_FALLBACK;
+
+	/*
+	 * The target image must not move while the controller is scanning it,
+	 * so writers are held off for the whole waveform.
+	 */
+	mutex_lock(&ebc->blit_lock);
+
+	/*
+	 * Nothing changed? Then do not drive the panel.
+	 *
+	 * This is not an optimisation, it is a correctness and wear fix. Every
+	 * update arrives here TWICE: FBIOPAN_DISPLAY alone produces two atomic
+	 * commits through drm_fb_helper's fbdev emulation (measured 2026-08-06 --
+	 * skipping the client's msync changes nothing), and ebc_plane_atomic_update()
+	 * queues a full-panel refresh for each without asking whether the pixels
+	 * moved. So the second scan runs a complete waveform with prev == next.
+	 *
+	 * A GC16 waveform with identical prev and next is NOT a no-op: it still
+	 * runs its whole flash sequence, so it re-shows the previous image and
+	 * settles back. At 12 MHz that is a visible three-second replay after
+	 * every single draw, which is what "the previous image comes back" was.
+	 * Left alone it is also continuous wear -- fbcon's cursor blink drove a
+	 * 38-frame full waveform every ~1.1 s indefinitely (docs/PENDING.md P29).
+	 *
+	 * ⚠️ EBC_MODE_RESET is exempt, and the test is on the UPDATE's own mode,
+	 * not the possibly-forced one. The boot-time clear legitimately has
+	 * prev == next == white: the controller indexes its LUT by (prev, next),
+	 * so the driver must MAKE the panel white rather than assume it is, and
+	 * skipping that would leave whatever the previous OS left on the glass.
+	 * Keying off `mode` instead would let force_mode disable the boot clear.
+	 *
+	 * ⚠️ @prev_unknown is exempt for the same reason RESET is: the skip is a
+	 * decision made from @prev_virt, and the flag says @prev_virt is not
+	 * evidence. Skipping there is precisely the fault (docs/PENDING.md P62) --
+	 * the update that would repair the glass is the one thrown away. This
+	 * exemption is NOT a weakening of the skip: it applies only after a
+	 * waveform has already failed to complete, and the zero-diff case that
+	 * P29 measured -- fbcon redrawing an identical image forever -- still
+	 * skips, because a successful refresh clears the flag.
+	 */
+	if (!ebc_report_image(ebc) && upd->mode != EBC_MODE_RESET &&
+	    !ebc->prev_unknown) {
+		if (debug_scan)
+			dev_info(ebc->dev, "scan: skipped, image identical to prev\n");
+		mutex_unlock(&ebc->blit_lock);
+		return;
+	}
+
+	/*
+	 * Repair before drawing, never instead of it: this returns with @prev_virt
+	 * describing the glass again, and @next_virt still holding the caller's
+	 * image, so the update below is driven from a true prev.
+	 *
+	 * ⚠️ It must run BEFORE the LUT is fetched. rk3026_ebc_waveform_lut()
+	 * decodes into one buffer inside the container and hands out a pointer to
+	 * it, so loading the RESET waveform overwrites whatever was fetched
+	 * earlier -- fetching first would silently drive the requested mode's
+	 * frame count through the RESET LUT.
+	 */
+	if (ebc->prev_unknown)
+		ebc_recover_panel(ebc, temp);
+
+	/*
+	 * A direct mode has no LUT of its own; fall back to the update's own mode
+	 * for the scan data so the DSP_CTRL class is the only thing that changed.
+	 */
+	lut = rk3026_ebc_waveform_lut(ebc->waveform, mode, temp, &frames);
+	if (!lut && mode != upd->mode)
+		lut = rk3026_ebc_waveform_lut(ebc->waveform, upd->mode, temp, &frames);
+	if (!lut) {
+		if (debug_scan)
+			dev_info(ebc->dev, "scan: no LUT for mode %u at %d C\n",
+				 mode, temp);
+		mutex_unlock(&ebc->blit_lock);
+		return;
+	}
+
+	if (debug_scan) {
+		dev_info(ebc->dev,
+			 "scan: mode %u (update asked %u) temp %d C, %u frames, clip %d,%d-%d,%d\n",
+			 mode, upd->mode, temp, frames, upd->clip.x1, upd->clip.y1,
+			 upd->clip.x2, upd->clip.y2);
+		ebc_report_env(ebc);
+	}
+
+	ebc_drive(ebc, lut, frames, mode);
+
+	if (debug_scan)
+		debug_scan--;
+
+	/*
+	 * What was driven in is now what the panel shows -- and this stays
+	 * UNCONDITIONAL. Making it conditional on success would leave @prev_virt
+	 * holding a still older image, which is just as false and carries no mark
+	 * saying so; @prev_unknown is what records that the copy cannot be
+	 * trusted, and the next draw acts on it.
+	 */
 	memcpy(ebc->prev_virt, ebc->next_virt, ebc->img_size);
 	mutex_unlock(&ebc->blit_lock);
 }

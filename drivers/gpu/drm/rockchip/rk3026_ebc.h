@@ -297,6 +297,24 @@ struct rk3026_ebc {
 	 */
 	bool			refresh_busy;
 
+	/*
+	 * @prev_virt does not describe the glass (docs/PENDING.md P62).
+	 *
+	 * Set when a waveform starts and cleared ONLY when every one of its
+	 * frames has been driven, so a timeout, an error path, or a path nobody
+	 * has written yet all leave it set by construction -- it is not an
+	 * enumeration of the ways a refresh can end early, and must not become
+	 * one. Success is the only clearer.
+	 *
+	 * Read at the next draw, where it both defeats the zero-diff skip and
+	 * forces a RESET pass first. Without it an aborted waveform leaves
+	 * @prev_virt claiming an image the panel does not show, and the skip
+	 * then discards the very update that would repair it: the glass becomes
+	 * unreachable from userspace until something happens to draw a third,
+	 * different image.
+	 */
+	bool			prev_unknown;
+
 	/* Serialises writers into @next_virt. */
 	struct mutex		blit_lock;
 
