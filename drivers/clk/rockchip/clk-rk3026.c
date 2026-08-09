@@ -102,33 +102,83 @@ static struct rockchip_pll_rate_table rk3026_cpll_clks[] = {
 	{ /* sentinel */ },
 };
 
-#define RK3026_DIV_PERI_MASK		0xf
-#define RK3026_DIV_PERI_SHIFT		0
+#define RK3026_DIV_PCLK_DBG_MASK	0xf
+#define RK3026_DIV_PCLK_DBG_SHIFT	0
+#define RK3026_DIV_ACLK_CORE_MASK	0x7
+#define RK3026_DIV_ACLK_CORE_SHIFT	4
+#define RK3026_DIV_ACLK_CPU_MASK	0x1f
+#define RK3026_DIV_ACLK_CPU_SHIFT	8
 
-#define RK3026_CLKSEL1(_core_periph_div)					\
+/*
+ * aclk_cpu_src divides APLL, not armclk, so the core mux the cpuclk notifier
+ * performs does NOT protect it: the instant APLL relocks at the new rate the
+ * whole CPU-domain AHB/APB (aclk_cpu, hclk_cpu, pclk_cpu, and with them GRF and
+ * the DDR controller's APB) moves with it. This divider is therefore sized for
+ * the HIGHEST rate in the table and written in pre_muxs, before APLL changes,
+ * so no transition ever leaves the bus faster than the highest entry allows.
+ * The top entry is 600 MHz, so /4 = 150 MHz -- the rate this board has run at
+ * since first light.
+ */
+#define RK3026_ACLK_CPU_DIV_SAFE	3
+
+#define RK3026_CLKSEL0(_aclk_cpu_div)						\
 	{									\
-		.reg = RK2928_CLKSEL_CON(1),					\
-		.val = HIWORD_UPDATE(_core_periph_div, RK3026_DIV_PERI_MASK,	\
-				RK3026_DIV_PERI_SHIFT)				\
+		.reg = RK2928_CLKSEL_CON(0),					\
+		.val = HIWORD_UPDATE(_aclk_cpu_div, RK3026_DIV_ACLK_CPU_MASK,	\
+				RK3026_DIV_ACLK_CPU_SHIFT)			\
 	}
 
-#define RK3026_CPUCLK_RATE(_prate, _core_periph_div)			\
+#define RK3026_CLKSEL1(_pclk_dbg_div, _aclk_core_div)				\
+	{									\
+		.reg = RK2928_CLKSEL_CON(1),					\
+		.val = HIWORD_UPDATE(_pclk_dbg_div, RK3026_DIV_PCLK_DBG_MASK,	\
+				RK3026_DIV_PCLK_DBG_SHIFT) |			\
+		       HIWORD_UPDATE(_aclk_core_div, RK3026_DIV_ACLK_CORE_MASK,	\
+				RK3026_DIV_ACLK_CORE_SHIFT)			\
+	}
+
+/*
+ * pre_muxs run before APLL is touched; divs run after it has relocked, while
+ * the core is still on the alternate parent on a raise and after the remux on
+ * a drop (clk-cpu.c). So the safe bus divider goes in pre_muxs and the
+ * per-rate values in divs, and neither direction has a window in which a
+ * clock is faster than its entry allows.
+ */
+#define RK3026_CPUCLK_RATE(_prate, _aclk_cpu_div, _pclk_dbg_div, _aclk_core_div) \
 	{								\
 		.prate = _prate,					\
+		.pre_muxs = {						\
+			RK3026_CLKSEL0(RK3026_ACLK_CPU_DIV_SAFE),	\
+		},							\
 		.divs = {						\
-			RK3026_CLKSEL1(_core_periph_div),		\
+			RK3026_CLKSEL0(_aclk_cpu_div),			\
+			RK3026_CLKSEL1(_pclk_dbg_div, _aclk_core_div),	\
 		},							\
 	}
 
 /*
- * The vendor's ARM DVFS table on this unit has exactly one entry: 912 MHz at
- * 1.4 V (0xc0a53778, terminated by {0, 0xfffffffe}). 1008 MHz is above the
- * part's 1.0 GHz rating and was inherited, not measured; the apll_clks entry
- * for 912 MHz (0xc08af57c) programs CLKSEL_CON1 = 0x007f0033, i.e. the
- * core_periph field is 3 (divide by 4).
+ * 600 MHz is what our U-Boot leaves APLL at (APLL_CON0/CON1 = 0x304b/0x1441,
+ * clk_summary apll/armclk 600000000), and its dividers reproduce the state this
+ * board has run in since first light: aclk_cpu 150, aclk_core 300, pclk_dbg 100.
+ * 504 divides down from the same dividers: 126 / 252 / 84 MHz.
+ *
+ * 🔴 912 MHz IS NOT HERE, AND MUST NOT BE ADDED WITHOUT A CARD AND A RESET PIN.
+ * It kills this board. Measured 2026-08-09 by walking the transition one CRU
+ * write at a time from userspace: raising the bus divider, muxing the core to
+ * gpll_armclk, APLL to slow mode, reprogramming to 912, relocking, APLL back to
+ * normal and BOTH CLKSEL_CON1 dividers all survive -- the board dies on the
+ * single write that muxes the core back onto a 912 MHz APLL, with vdd_arm at a
+ * measured 1.45 V and aclk_core/pclk_dbg at the vendor's own 228 MHz. A 600 ->
+ * 504 -> 600 round trip through the identical sequence survives, so the
+ * sequence is not the fault; the rate is. Vendor Android does run 912 on this
+ * silicon, so something in its configuration differs from ours -- the open lead
+ * is the PL310 latencies in rk3026.dtsi (tag 1 1 1, data 1 2 1), which are the
+ * fastest settings possible and are not obviously valid at 912. Untested.
  */
 static struct rockchip_cpuclk_rate_table rk3026_cpuclk_rates[] __initdata = {
-	RK3026_CPUCLK_RATE(912000000, 3),
+	/* _prate, aclk_cpu div, pclk_dbg div, aclk_core div (register values) */
+	RK3026_CPUCLK_RATE(600000000, 3, 5, 1),
+	RK3026_CPUCLK_RATE(504000000, 3, 5, 1),
 };
 
 static const struct rockchip_cpuclk_reg_data rk3026_cpuclk_data = {
