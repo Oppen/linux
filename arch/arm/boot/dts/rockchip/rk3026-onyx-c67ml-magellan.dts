@@ -406,32 +406,25 @@
 		vin-supply = <&vcc_sys>;
 	};
 
+	/*
+	 * The USB host domain, which is a gate on the 3.2 V IO rail -- not a 5 V
+	 * supply. ACT8931A Table 2, written for the RK2928/RK2926, puts USB_Host
+	 * on REG1 together with IO, NandFlash and TP VCC at 3.3 V, and the part
+	 * has no 5 V output: REG1-REG7 plus CHGIN, the charger input.
+	 *
+	 * gpio1 5 is wifi_power and is ACTIVE LOW -- DR bit 5 = 1 is the radio
+	 * off, 0 is on, both measured. fixed.c here does not parse
+	 * enable-active-high, so this flag plus regulator-boot-on is what
+	 * asserts the pin low.
+	 */
 	vcc_host: vcc-host {
 		compatible = "regulator-fixed";
 		regulator-name = "vcc_host";
-		regulator-min-microvolt = <5000000>;
-		regulator-max-microvolt = <5000000>;
-		/*
-		 * gpio1 5 is "wifi_power" and it is ACTIVE LOW -- both states
-		 * measured on this unit (SETTLED.md 2026-08-04): radio off with
-		 * gpio1 DR = 0x00380026 (bit 5 = 1), radio on and scanning with
-		 * DR = 0x00000006 (bit 5 = 0). DDR has bit 5 set in both, so it
-		 * is an output either way.
-		 *
-		 * 🔴 The HARDWARE-CONSTANTS bank table was captured with WiFi
-		 * OFF, so its "out, 1" for this pin is the DOWN state. Reading
-		 * that as the working value is what kept the radio unpowered:
-		 * with no gpio here nothing drove the pin, so the radio's state
-		 * was whatever the previous boot happened to leave, and a boot
-		 * after an Android session with WiFi off left it powered down.
-		 *
-		 * Polarity comes from this flag alone: fixed.c in this kernel
-		 * does not parse enable-active-high, and regulator-boot-on makes
-		 * enabled_at_boot true -> GPIOD_OUT_HIGH -> asserted -> pin low.
-		 */
+		regulator-min-microvolt = <3200000>;
+		regulator-max-microvolt = <3200000>;
 		gpio = <&gpio1 5 GPIO_ACTIVE_LOW>;
 		regulator-boot-on;
-		vin-supply = <&vcc_sys>;
+		vin-supply = <&vcc_io>;
 	};
 };
 
