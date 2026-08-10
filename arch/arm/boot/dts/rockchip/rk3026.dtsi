@@ -190,15 +190,27 @@
 	 * Left enabled, it produced:
 	 *     ARM Global timer register failed (-22)
 	 *     Failed to initialize '/timer@1013c200': -22
-	 * because clk-rk3026.c registers the CLKSEL_CON(1)[3:0] core-periph
-	 * divider with id 0 rather than CORE_PERI, so of_clk_get() finds
-	 * nothing and arm_global_timer bails with -EINVAL.
+	 * because clk-rk3026.c registered the CLKSEL_CON(1)[3:0] core-periph
+	 * divider with id 0 rather than CORE_PERI, so of_clk_get() found
+	 * nothing and arm_global_timer bailed with -EINVAL.
 	 *
-	 * ⚠️ Do NOT "fix" that by exporting CORE_PERI from the clock driver.
-	 * That makes the global timer register SUCCESSFULLY and become the
-	 * clocksource -- the precise failure mainline's comment warns about,
-	 * and it gets worse once cpufreq-dt works and armclk actually moves.
-	 * The error message is the symptom; the enabled node is the bug.
+	 * ❌ **"Do NOT fix that by exporting CORE_PERI" is RETRACTED 2026-08-10.**
+	 * The argument was that the export makes this node register successfully
+	 * and become the clocksource. It cannot: the node is `status =
+	 * "disabled"`, so it is never probed and never asks for the clock. A
+	 * disabled node does not consume a clock that exists.
+	 *
+	 * CORE_PERI **is** exported now, and it had to be: `local_timer` below
+	 * names it too, and while it did not resolve, the TWD's clk notifier
+	 * never armed and the kernel's tick could not follow cpufreq (P69,
+	 * measured at 0.8397x real time at armclk 504). Upstream registers the
+	 * same clock for the same reason -- clk-rk3188.c, whose rk3066a/rk3188
+	 * keep their global timer disabled exactly as this one is.
+	 *
+	 * 🔴 What remains true, and is the actual rule: **this node stays
+	 * disabled.** Its rate follows the CPU, so enabling it puts the
+	 * clocksource back on a clock that moves under cpufreq. The clocksource
+	 * comes from timer@20044020 (xin24m) instead.
 	 *
 	 * U-Boot is a different case and legitimately uses this timer: it has
 	 * no cpufreq, sets APLL once, and its clk driver does implement

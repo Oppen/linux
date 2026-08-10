@@ -290,7 +290,15 @@ static struct rockchip_clk_branch rk3026_clk_branches[] __initdata = {
 	 * CLKSEL_CON(1): bits[3:0]=pclk_dbg div, bits[6:4]=aclk_core div,
 	 *                bits[9:8]=hclk_cpu div, bits[14:12]=pclk_cpu div
 	 */
-	COMPOSITE_NOMUX(0, "pclk_dbg", "armclk", CLK_IGNORE_UNUSED,
+	/*
+	 * CLKSEL_CON(1)[3:0] is both the debug-APB divider and the A9 MPCore's
+	 * PERIPHCLK, so it carries the id the dts asks for. Without CORE_PERI
+	 * the TWD's of_clk_get() fails, twd_clk_init() skips
+	 * clk_notifier_register(), and the tick never follows cpufreq (P69).
+	 *
+	 * Keep CLK_DIVIDER_READ_ONLY: rk3026_cpuclk_rates[] owns this field.
+	 */
+	COMPOSITE_NOMUX(CORE_PERI, "core_peri", "armclk", CLK_IGNORE_UNUSED,
 			RK2928_CLKSEL_CON(1), 0, 4, DFLAGS | CLK_DIVIDER_READ_ONLY,
 			RK2928_CLKGATE_CON(9), 1, GFLAGS),
 	COMPOSITE_NOMUX(0, "aclk_core_pre", "armclk", CLK_IGNORE_UNUSED,
@@ -684,7 +692,7 @@ static struct rockchip_clk_branch rk3026_clk_branches[] __initdata = {
 	/* Debug clocks */
 	GATE(0, "clk_core_dbg", "armclk", CLK_IGNORE_UNUSED,
 			RK2928_CLKGATE_CON(9), 0, GFLAGS),
-	GATE(0, "pclk_dbg_pre", "pclk_dbg", CLK_IGNORE_UNUSED,
+	GATE(0, "pclk_dbg_pre", "core_peri", CLK_IGNORE_UNUSED,
 			RK2928_CLKGATE_CON(9), 1, GFLAGS),
 	GATE(0, "clk_l2c", "armclk", CLK_IGNORE_UNUSED,
 			RK2928_CLKGATE_CON(9), 4, GFLAGS),
