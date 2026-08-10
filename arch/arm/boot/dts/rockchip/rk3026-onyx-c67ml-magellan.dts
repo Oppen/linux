@@ -412,27 +412,24 @@
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
 		/*
-		 * NO gpio property, deliberately: this regulator registers and
-		 * drives nothing.
+		 * gpio1 5 is "wifi_power" and it is ACTIVE LOW -- both states
+		 * measured on this unit (SETTLED.md 2026-08-04): radio off with
+		 * gpio1 DR = 0x00380026 (bit 5 = 1), radio on and scanning with
+		 * DR = 0x00000006 (bit 5 = 0). DDR has bit 5 set in both, so it
+		 * is an output either way.
 		 *
-		 * What is evidenced about gpio1 5 (HARDWARE-CONSTANTS §7, live
-		 * /sys/kernel/debug/gpio plus live DR/DDR reads): it is labelled
-		 * "wifi_power" and it is an OUTPUT DRIVEN HIGH under the vendor
-		 * kernel -- gpio1 DDR 0x007d8426 and DR 0x00380026 both have bit
-		 * 5 set.
+		 * 🔴 The HARDWARE-CONSTANTS bank table was captured with WiFi
+		 * OFF, so its "out, 1" for this pin is the DOWN state. Reading
+		 * that as the working value is what kept the radio unpowered:
+		 * with no gpio here nothing drove the pin, so the radio's state
+		 * was whatever the previous boot happened to leave, and a boot
+		 * after an Android session with WiFi off left it powered down.
 		 *
-		 * What is NOT evidenced: that driving it LOW enables anything.
-		 * That came from rk29sdk_wifi_power() in a DIFFERENT board's
-		 * source, which has no standing here.  An earlier revision of
-		 * this node declared GPIO_ACTIVE_LOW on that basis, so the
-		 * fixed-voltage driver would have driven the pin to the opposite
-		 * of its live level.
-		 *
-		 * Settle the polarity by measurement before restoring any gpio
-		 * here.  There is separately no host VBUS GPIO to use instead:
-		 * usb20host_power_enable is a bare "bx lr" and gpio0 6 is
-		 * live-muxed I2C3_SCL.
+		 * Polarity comes from this flag alone: fixed.c in this kernel
+		 * does not parse enable-active-high, and regulator-boot-on makes
+		 * enabled_at_boot true -> GPIOD_OUT_HIGH -> asserted -> pin low.
 		 */
+		gpio = <&gpio1 5 GPIO_ACTIVE_LOW>;
 		regulator-boot-on;
 		vin-supply = <&vcc_sys>;
 	};
