@@ -427,14 +427,6 @@ static int tps65185_probe(struct i2c_client *client)
 				     PTR_ERR(data->wakeup_gpio),
 				     "failed to get wakeup gpio\n");
 
-	/*
-	 * SLVSAQ8G Figure 2: 1.8 ms minimum from the WAKEUP rising edge to the
-	 * IC accepting an I2C transaction. Nothing between here and the first
-	 * transfer is guaranteed to take that long, so wait explicitly.
-	 */
-	if (data->wakeup_gpio)
-		usleep_range(2000, 3000);
-
 	data->vcom_ctrl_gpio = devm_gpiod_get_optional(&client->dev, "vcom-ctrl", GPIOD_OUT_LOW);
 	if (IS_ERR(data->vcom_ctrl_gpio))
 		return dev_err_probe(&client->dev,
@@ -445,6 +437,10 @@ static int tps65185_probe(struct i2c_client *client)
 	if (ret)
 		return dev_err_probe(&client->dev, ret,
 				     "failed to get vin regulator\n");
+
+	// TPS65185x PMIC for E Ink Vizplex Enabled Electronic Paper Display Chapter 7.6 Figure 2:
+	// "Minimum delay time between WAKEUP rising edge and IC ready to accept I2C transaction."
+	usleep_range(1800, 3000);
 
 	data->dev = &client->dev;
 	i2c_set_clientdata(client, data);
