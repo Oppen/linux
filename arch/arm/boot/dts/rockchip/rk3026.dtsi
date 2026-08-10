@@ -445,11 +445,67 @@
 		status = "disabled";
 	};
 
+	/*
+	 * ORDER IS LOAD-BEARING. rk_timer_init() (timer-rockchip.c) hands the
+	 * FIRST matching node to rk_clkevt_init() and only the SECOND to
+	 * rk_clksrc_init() -- and only the latter calls clocksource_mmio_init()
+	 * and sched_clock_register(). With one node declared, the port ran with
+	 * NO hardware clocksource at all: sched_clock and every ktime came off
+	 * jiffies at 100 Hz. Do not reorder these two, and do not delete the
+	 * second one to "simplify".
+	 */
 	timer@20044000 {
 		compatible = "rockchip,rk3026-timer", "rockchip,rk3288-timer";
 		reg = <0x20044000 0x20>;
 		interrupts = <GIC_SPI 28 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&cru PCLK_TIMER0>, <&xin24m>;
+		clock-names = "pclk", "timer";
+	};
+
+	/*
+	 * timer1, the clocksource. xin24m, so it does not move with armclk --
+	 * which is the whole point: the tick is the A9 TWD at armclk/6 with a
+	 * boot-time calibration nothing updates, so anything timed off jiffies
+	 * scales with CPU frequency (PENDING P69).
+	 *
+	 * MEASURED on our own kernel 2026-08-10, unit 2, one variable, and
+	 * REFERENCED TO THE HOST CLOCK -- the board is never asked how long
+	 * anything took, because its tick is the thing under test:
+	 *  - it counts. Programmed by hand exactly as rk_clksrc_init() would
+	 *    (LOAD = ~0, CTRL = 1) it advances monotonically; before that the
+	 *    whole window read zero, because nothing in this port had ever
+	 *    started it -- NOT because a gate was closed. CLKGATE_CON1 reads
+	 *    0x3F00, i.e. bits 0 and 1 (timer0, timer1) both CLEAR = ungated.
+	 *  - 24,003,040 Hz with armclk pinned at 600 and 24,002,565 Hz pinned at
+	 *    504, each over a 30 s window timed on the host, adb latency
+	 *    bounding both to +-0.09%. The two agree to 0.002%, so the counter
+	 *    does not move with armclk -- which is the property being bought.
+	 *
+	 * ⚠️ The first pass at this measurement timed the window with `sleep` ON
+	 * THE BOARD and read 23.99 MHz at 600 and 28.55 at 504. Neither figure
+	 * was the counter moving: the ruler was jiffies, i.e. P69 itself. It
+	 * agreed with the host-timed answer at 600 only because 600 is where the
+	 * TWD was calibrated. INSTRUMENTATION.md: the instrument must not share
+	 * the fault under test.
+	 *
+	 * GIC_SPI 29 is MEASURED, not inherited: with timer1 armed for a 1 s
+	 * user-defined count and its interrupt unmasked, GICD_ISPENDR1
+	 * (0x1013d204) went 0x00000000 -> 0x20000000, i.e. bit 29 = hwirq 61.
+	 * The line is masked in ISENABLER1, so it could only sit pending.
+	 * ⚠️ The property is required -- rk_timer_probe() returns -EINVAL with
+	 * no `interrupts` -- but the clocksource path never request_irq()s it.
+	 *
+	 * "pclk" is PCLK_TIMER1 by name only. The window's real APB port is
+	 * pclk_timer0: live, CLKGATE_CON7 bit 8 (pclk_timer1) is SET = gated
+	 * and 0x20044020.. reads and counts anyway. So this phandle ungates a
+	 * clock the block does not need, which is harmless and honest about
+	 * which gate carries the name; it is not a claim about the topology.
+	 */
+	timer@20044020 {
+		compatible = "rockchip,rk3026-timer", "rockchip,rk3288-timer";
+		reg = <0x20044020 0x20>;
+		interrupts = <GIC_SPI 29 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru PCLK_TIMER1>, <&xin24m>;
 		clock-names = "pclk", "timer";
 	};
 
