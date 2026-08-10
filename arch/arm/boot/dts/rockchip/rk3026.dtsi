@@ -547,8 +547,15 @@
 		status = "disabled";
 	};
 
+	/*
+	 * "snps,dwc2" only, matching upstream rk3xxx.dtsi, which gives the
+	 * rockchip compatible to usb@10180000 and NOT to this node. That
+	 * compatible selects dwc2_set_rk_params(), a param set written for the
+	 * OTG core: it forces host_rx_fifo_size = 525, which this core's
+	 * 824-word DFIFO rejects on every probe (P58).
+	 */
 	usb_host: usb@101c0000 {
-		compatible = "rockchip,rk3026-usb", "rockchip,rk3066-usb", "snps,dwc2";
+		compatible = "snps,dwc2";
 		reg = <0x101c0000 0x40000>;
 		interrupts = <GIC_SPI 11 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&cru HCLK_HOST>;
