@@ -30,21 +30,6 @@ static int enable_usb_uart;
 #define UOC_CON0_DISABLE				BIT(4)
 #define UOC_CON0_COMMON_ON_N				BIT(0)
 
-/*
- * UOC_CON1 bit 0 is the PHY's suspend bit. The vendor kernel's
- * usb20host_phy_suspend()/resume writes exactly it: suspend sets it, resume
- * clears it (docs/re/VENDOR-KERNEL-USB.md §2). Confirmed on hardware
- * 2026-08-04 by reading Android with the radio enumerated: UOC1_CON1 is
- * 0x1d5 (bit 0 set) while the host is idle and 0x1d4 (bit 0 clear) while a
- * device is attached and running.
- *
- * Mainline never touched this register, so a host PHY left suspended produced
- * no 480 MHz UTMI clock, dwc2's CSFTRST could never self-clear, and the
- * controller failed probe with -16 on every cold boot.
- */
-#define UOC_CON1					0x04
-#define UOC_CON1_SUSPEND				BIT(0)
-
 #define UOC_CON2					0x08
 #define UOC_CON2_SOFT_CON_SEL				BIT(2)
 
@@ -60,13 +45,6 @@ static int enable_usb_uart;
 struct rockchip_usb_phys {
 	int reg;
 	const char *pll_name;
-	/*
-	 * Drive UOC_CON1's suspend bit, and pulse the "phy-reset" reset if the
-	 * node declares one, from power_on/power_off. Opt-in per PHY because the
-	 * OTG PHY on RK3026 works without either and carries the only console
-	 * this board has -- changing its sequence is not worth the risk.
-	 */
-	bool suspend_ctl;
 };
 
 struct rockchip_usb_phy_base;
@@ -92,20 +70,9 @@ struct rockchip_usb_phy {
 	struct clk_hw	clk480m_hw;
 	struct phy	*phy;
 	bool		uart_enabled;
-	bool		suspend_ctl;
 	struct reset_control *reset;
 	struct regulator *vbus;
 };
-
-/* UOC_CON1 suspend bit; see the register comment above. */
-static int rockchip_usb_phy_suspend(struct rockchip_usb_phy *phy, bool suspend)
-{
-	if (!phy->suspend_ctl)
-		return 0;
-
-	return regmap_write(phy->base->reg_base, phy->reg_offset + UOC_CON1,
-			    FIELD_PREP_WM16(UOC_CON1_SUSPEND, suspend));
-}
 
 static int rockchip_usb_phy_power(struct rockchip_usb_phy *phy,
 					   bool siddq)
@@ -173,7 +140,6 @@ static int rockchip_usb_phy_power_off(struct phy *_phy)
 	if (phy->uart_enabled)
 		return -EBUSY;
 
-	rockchip_usb_phy_suspend(phy, true);
 	clk_disable_unprepare(phy->clk480m);
 
 	return 0;
@@ -193,26 +159,6 @@ static int rockchip_usb_phy_power_on(struct phy *_phy)
 		if (ret)
 			return ret;
 	}
-
-	/*
-	 * Reset the PHY here rather than in the .reset op, because dwc2 -- the
-	 * only consumer on this SoC -- calls phy_init() and phy_power_on() but
-	 * NEVER phy_reset(), so that op is dead code for it (dwc2/platform.c).
-	 * Opt-in via a "phy-reset" reset in the node, so a PHY that does not
-	 * declare one behaves exactly as before.
-	 */
-	if (phy->suspend_ctl && phy->reset) {
-		reset_control_assert(phy->reset);
-		udelay(15);
-		reset_control_deassert(phy->reset);
-		/*
-		 * The vendor waits 1500 us after deassert before using the block
-		 * (usb20otg_soft_reset); the UTMI PLL needs to relock.
-		 */
-		usleep_range(1500, 2000);
-	}
-
-	rockchip_usb_phy_suspend(phy, false);
 
 	return clk_prepare_enable(phy->clk480m);
 }
@@ -287,7 +233,6 @@ static int rockchip_usb_phy_init(struct rockchip_usb_phy_base *base,
 	while (base->pdata->phys[i].reg) {
 		if (base->pdata->phys[i].reg == reg_offset) {
 			init.name = base->pdata->phys[i].pll_name;
-			rk_phy->suspend_ctl = base->pdata->phys[i].suspend_ctl;
 			break;
 		}
 		i++;
@@ -380,14 +325,7 @@ err_clk:
 static const struct rockchip_usb_phy_pdata rk3026_pdata = {
 	.phys = (struct rockchip_usb_phys[]){
 		{ .reg = 0x17c, .pll_name = "sclk_otgphy0_480m" }, /* GRF_UOC0_CON0 */
-		/*
-		 * Host PHY. suspend_ctl only here: it is the one that needs
-		 * UOC_CON1's suspend bit cleared and its UTMI reset pulsed, and
-		 * the OTG PHY next to it carries this board's only console --
-		 * see the UOC_CON1 comment and docs/SETTLED.md 2026-08-04.
-		 */
-		{ .reg = 0x190, .pll_name = "sclk_otgphy1_480m",
-		  .suspend_ctl = true },			  /* GRF_UOC1_CON0 */
+		{ .reg = 0x190, .pll_name = "sclk_otgphy1_480m" }, /* GRF_UOC1_CON0 */
 		{ /* sentinel */ }
 	},
 };
