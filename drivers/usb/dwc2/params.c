@@ -133,6 +133,21 @@ static void dwc2_set_rk_params(struct dwc2_hsotg *hsotg)
 	p->no_clock_gating = true;
 }
 
+/*
+ * The RK3026 host port is a host-only core (op_mode 6) whose ID input is
+ * not wired to anything meaningful: the internal connector-ID comparator
+ * flips continuously and every CONIDSTSCHNG re-inits the core, so the
+ * port never passes connect debounce. The vendor kernel never uses the
+ * internal comparator on this SoC. Treat the ID pin as external so the
+ * interrupt stays masked; the OTG port keeps stock rk3066 behaviour.
+ */
+static void dwc2_set_rk3026_params(struct dwc2_hsotg *hsotg)
+{
+	dwc2_set_rk_params(hsotg);
+	if (hsotg->dr_mode == USB_DR_MODE_HOST)
+		hsotg->params.external_id_pin_ctl = true;
+}
+
 static void dwc2_set_ltq_danube_params(struct dwc2_hsotg *hsotg)
 {
 	struct dwc2_core_params *p = &hsotg->params;
@@ -313,6 +328,7 @@ const struct of_device_id dwc2_of_match_table[] = {
 	{ .compatible = "ingenic,x1700-otg", .data = dwc2_set_x1600_params },
 	{ .compatible = "ingenic,x1830-otg", .data = dwc2_set_x1600_params },
 	{ .compatible = "ingenic,x2000-otg", .data = dwc2_set_x2000_params },
+	{ .compatible = "rockchip,rk3026-usb", .data = dwc2_set_rk3026_params },
 	{ .compatible = "rockchip,rk3066-usb", .data = dwc2_set_rk_params },
 	{ .compatible = "lantiq,danube-usb", .data = &dwc2_set_ltq_danube_params },
 	{ .compatible = "lantiq,ase-usb", .data = &dwc2_set_ltq_ase_params },
