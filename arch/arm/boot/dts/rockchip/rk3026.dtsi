@@ -265,7 +265,19 @@
 				 * vendor never resets the host block on its own
 				 * (usb20host_soft_reset is a bare `bx lr`) --
 				 * usb20otg_soft_reset resets BOTH ports' UTMI
-				 * together. docs/SETTLED.md 2026-08-04.
+				 * together.
+				 *
+				 * Re-rooted 2026-08-11 against
+				 * re-workspace/evidence/boox-zImage, the old
+				 * docs/SETTLED.md citation having been deleted:
+				 * usb20otg_soft_reset at c0691d54 pulses CON6
+				 * bits 7, 8 and 9 together and usb20host_soft_reset
+				 * at c0691c10 really is `bx lr`.
+				 *
+				 * ⚠️ That confirms bit 8 is part of the USB reset;
+				 * it does NOT prove bit 8 is UTMI1 rather than
+				 * UTMI0, because the vendor never resets one port
+				 * alone. facts/board.md carries the full verdict.
 				 *
 				 * Deliberately NOT added to usb_otg_phy: that one
 				 * already works and carries the only console.
