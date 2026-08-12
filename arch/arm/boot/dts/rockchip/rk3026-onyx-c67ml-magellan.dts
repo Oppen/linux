@@ -416,6 +416,9 @@
 	 * off, 0 is on, both measured. fixed.c here does not parse
 	 * enable-active-high, so this flag plus regulator-boot-on is what
 	 * asserts the pin low.
+	 *
+	 * startup-delay-us: RTL8188EUS power-on sequence, docs/RTL8188EUS.pdf
+	 * sec 7.1 Table 11 -- T_on + T_por + T_attach + T_k-state, rounded up.
 	 */
 	vcc_host: vcc-host {
 		compatible = "regulator-fixed";
@@ -424,6 +427,7 @@
 		regulator-max-microvolt = <3200000>;
 		gpio = <&gpio1 5 GPIO_ACTIVE_LOW>;
 		regulator-boot-on;
+		startup-delay-us = <300000>;
 		vin-supply = <&vcc_io>;
 	};
 };
