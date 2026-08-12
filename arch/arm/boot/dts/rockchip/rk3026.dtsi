@@ -560,14 +560,19 @@
 	};
 
 	/*
-	 * "snps,dwc2" only, matching upstream rk3xxx.dtsi, which gives the
-	 * rockchip compatible to usb@10180000 and NOT to this node. That
-	 * compatible selects dwc2_set_rk_params(), a param set written for the
-	 * OTG core: it forces host_rx_fifo_size = 525, which this core's
-	 * 824-word DFIFO rejects on every probe (P58).
+	 * Rockchip compatible restored 2026-08-12 (UNPROVEN until booted).
+	 * The old "snps,dwc2"-only justification was refuted: it claimed
+	 * dwc2_set_rk_params()'s host_rx_fifo_size = 525 "rejects on every
+	 * probe" (P58), but CHECK_RANGE (params.c:802,863) warns and clamps
+	 * to the hardware value (292 here) -- it never fails probe.
+	 *
+	 * What the Rockchip params buy: power_down = NONE and
+	 * no_clock_gating = true (params.c:128,133), each sufficient to stop
+	 * the P68 hibernation that switched off the core's VDD. They do NOT
+	 * set external_id_pin_ctl, so the CONIDSTSCHNG storm is untouched.
 	 */
 	usb_host: usb@101c0000 {
-		compatible = "snps,dwc2";
+		compatible = "rockchip,rk3026-usb", "rockchip,rk3066-usb", "snps,dwc2";
 		reg = <0x101c0000 0x40000>;
 		interrupts = <GIC_SPI 11 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&cru HCLK_HOST>;
