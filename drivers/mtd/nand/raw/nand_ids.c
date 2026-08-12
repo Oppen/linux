@@ -92,6 +92,19 @@ struct nand_flash_dev nand_flash_ids[] = {
 		{ .id = {0x45, 0xd7, 0x84, 0x93, 0x72, 0x50} },
 		  SZ_16K, SZ_4K, SZ_4M, NAND_SKIP_BBTSCAN, 6, 1280,
 		  NAND_ECC_INFO(40, SZ_1K) },
+	/*
+	 * Same physical part, unit 2: the last ID byte reads 0x57 here, not 0x50.
+	 * Confirmed device-tier 2026-08-10 (dmesg: "BOOX-ID: raw id = 45 d7 84 93
+	 * 72 57 ..."), which is why the entry above alone left unit 2 falling back
+	 * to nand_decode_ext_id()'s 8 KiB/128 B guess and failing probe with
+	 * -EINVAL, identical to the pre-P42 symptom. Geometry is unchanged from
+	 * the sibling entry above -- only the trailing ID byte differs, the same
+	 * way SDTNQGAMA/SDTNRGAMA below differ from each other by 57 vs 50.
+	 */
+	{"SDTNQFAMA 4G 3.3V 8-bit (unit 2)",
+		{ .id = {0x45, 0xd7, 0x84, 0x93, 0x72, 0x57} },
+		  SZ_16K, SZ_4K, SZ_4M, NAND_SKIP_BBTSCAN, 6, 1280,
+		  NAND_ECC_INFO(40, SZ_1K) },
 	{"SDTNQGAMA 64G 3.3V 8-bit",
 		{ .id = {0x45, 0xde, 0x94, 0x93, 0x76, 0x57} },
 		  SZ_16K, SZ_8K, SZ_4M, 0, 6, 1280, NAND_ECC_INFO(40, SZ_1K) },
