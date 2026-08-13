@@ -89,6 +89,42 @@ enum nfc_type {
 	NFC_V9,
 };
 
+/*
+ * Vendor-compatible page randomizer (NFC v6 encoding: RANDMZ_CFG = seed,
+ * bits 31:30 = enable). The vendor stack writes seed[page & 0x7f] before
+ * every page transfer and sets the enable bits only outside the IDB
+ * reserve (CS0, first randomizer_skip_blks blocks), which is written
+ * unscrambled. Off by default; only the ECC (DMA/BCH) path honours it.
+ */
+static bool randomizer;
+module_param(randomizer, bool, 0444);
+MODULE_PARM_DESC(randomizer, "Scramble/descramble pages with the vendor per-page seeds (default off)");
+
+static uint randomizer_skip_blks = 16;
+module_param(randomizer_skip_blks, uint, 0444);
+MODULE_PARM_DESC(randomizer_skip_blks, "Leading blocks left unscrambled (vendor IDB reserve, default 16)");
+
+#define RANDMZ_EN		(0x3U << 30)
+
+static const u16 rk_nfc_randomizer_seeds[128] = {
+	0x576a, 0x05e8, 0x629d, 0x45a3, 0x649c, 0x4bf0, 0x2342, 0x272e,
+	0x7358, 0x4ff3, 0x73ec, 0x5f70, 0x7a60, 0x1ad8, 0x3472, 0x3612,
+	0x224f, 0x0454, 0x030e, 0x70a5, 0x7809, 0x2521, 0x48f4, 0x5a2d,
+	0x492a, 0x043d, 0x7f61, 0x3969, 0x517a, 0x3b42, 0x769d, 0x0647,
+	0x7e2a, 0x1383, 0x49d9, 0x07b8, 0x2578, 0x4eec, 0x4423, 0x352f,
+	0x5b22, 0x72b9, 0x367b, 0x24b6, 0x7e8e, 0x2318, 0x6bd0, 0x5519,
+	0x1783, 0x18a7, 0x7b6e, 0x7602, 0x4b7f, 0x3648, 0x2c53, 0x6b99,
+	0x0c23, 0x67cf, 0x7e0e, 0x4d8c, 0x5079, 0x209d, 0x244a, 0x747b,
+	0x350b, 0x0e4d, 0x7004, 0x6ac3, 0x7f3e, 0x21f5, 0x7a15, 0x2379,
+	0x1517, 0x1aba, 0x4e77, 0x15a1, 0x04fa, 0x2d61, 0x253a, 0x1302,
+	0x1f63, 0x5ab3, 0x049a, 0x5ae8, 0x1cd7, 0x4a00, 0x30c8, 0x3247,
+	0x729c, 0x5034, 0x2b0e, 0x57f2, 0x00e4, 0x575b, 0x6192, 0x38f8,
+	0x2f6a, 0x0c14, 0x45fc, 0x41df, 0x38da, 0x7ae1, 0x7322, 0x62df,
+	0x5e39, 0x0e64, 0x6d85, 0x5951, 0x5937, 0x6281, 0x33a1, 0x6a32,
+	0x3a5a, 0x2bac, 0x743a, 0x5e74, 0x3b2e, 0x7ec7, 0x4fd2, 0x5d28,
+	0x751f, 0x3ef8, 0x39b1, 0x4e49, 0x746b, 0x6ef6, 0x44be, 0x6db7,
+};
+
 /**
  * struct rk_ecc_cnt_status: represent a ecc status data.
  * @err_flag_bit: error flag bit index at register.
@@ -465,6 +501,22 @@ static int rk_nfc_setup_interface(struct nand_chip *chip, int target,
 	return 0;
 }
 
+static void rk_nfc_set_randomizer(struct nand_chip *chip, int page)
+{
+	struct rk_nfc *nfc = nand_get_controller_data(chip);
+	struct mtd_info *mtd = nand_to_mtd(chip);
+	int pages_per_blk = mtd->erasesize / mtd->writesize;
+	u32 cfg = 0;
+
+	if (randomizer) {
+		cfg = rk_nfc_randomizer_seeds[page & 0x7f];
+		if (page >= randomizer_skip_blks * pages_per_blk)
+			cfg |= RANDMZ_EN;
+	}
+
+	writel(cfg, nfc->regs + nfc->cfg->randmz_off);
+}
+
 static void rk_nfc_xfer_start(struct rk_nfc *nfc, u8 rw, u8 n_KB,
 			      dma_addr_t dma_data, dma_addr_t dma_oob)
 {
@@ -525,6 +577,9 @@ static int rk_nfc_write_page_raw(struct nand_chip *chip, const u8 *buf,
 
 	if (!buf)
 		memset(nfc->page_buf, 0xff, mtd->writesize + mtd->oobsize);
+
+	/* Raw PIO path is never scrambled; clear a stale enable. */
+	writel(0, nfc->regs + nfc->cfg->randmz_off);
 
 	for (i = 0; i < ecc->steps; i++) {
 		/* Copy data to the NFC buffer. */
@@ -670,6 +725,7 @@ static int rk_nfc_write_page_hwecc(struct nand_chip *chip, const u8 *buf,
 	reinit_completion(&nfc->done);
 	writel(INT_DMA, nfc->regs + nfc->cfg->int_en_off);
 
+	rk_nfc_set_randomizer(chip, page);
 	rk_nfc_xfer_start(nfc, NFC_WRITE, ecc->steps, dma_data,
 			  dma_oob);
 	ret = wait_for_completion_timeout(&nfc->done,
@@ -723,6 +779,9 @@ static int rk_nfc_read_page_raw(struct nand_chip *chip, u8 *buf, int oob_on,
 		 */
 		return -EIO;
 	}
+
+	/* Raw PIO path is never scrambled; clear a stale enable. */
+	writel(0, nfc->regs + nfc->cfg->randmz_off);
 
 	nand_read_page_op(chip, page, 0, NULL, 0);
 	rk_nfc_read_buf(nfc, nfc->page_buf, mtd->writesize + mtd->oobsize);
@@ -805,6 +864,7 @@ static int rk_nfc_read_page_hwecc(struct nand_chip *chip, u8 *buf, int oob_on,
 
 	reinit_completion(&nfc->done);
 	writel(INT_DMA, nfc->regs + nfc->cfg->int_en_off);
+	rk_nfc_set_randomizer(chip, page);
 	rk_nfc_xfer_start(nfc, NFC_READ, ecc->steps, dma_data,
 			  dma_oob);
 	ret = wait_for_completion_timeout(&nfc->done,
