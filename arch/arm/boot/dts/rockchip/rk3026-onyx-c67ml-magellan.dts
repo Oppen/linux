@@ -735,8 +735,12 @@
 		 * timer backstop). Poll for data; INT still serves the
 		 * soft-reset bootloader-ready completion at probe. */
 		poll-interval = <10>;
-		touchscreen-size-x = <1024>;
-		touchscreen-size-y = <758>;
+		/* Measured 2026-08-14 (corner drag + corner tap, device upright):
+		 * origin top-left, X horizontal 0..~758, Y vertical 0..~1024, no
+		 * inversion. The vendor pdata's 1024x758 is the landscape view;
+		 * these are portrait, matching how the chip reports. */
+		touchscreen-size-x = <758>;
+		touchscreen-size-y = <1024>;
 	};
 };
 
