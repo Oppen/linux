@@ -186,6 +186,7 @@ static int cyttsp_set_operational_mode(struct cyttsp *ts)
 static int cyttsp_set_sysinfo_mode(struct cyttsp *ts)
 {
 	int error;
+	int tries;
 
 	memset(&ts->sysinfo_data, 0, sizeof(ts->sysinfo_data));
 
@@ -194,12 +195,23 @@ static int cyttsp_set_sysinfo_mode(struct cyttsp *ts)
 	if (error)
 		return error;
 
-	/* read sysinfo registers */
-	msleep(CY_DELAY_DFLT);
-	error = ttsp_read_block_data(ts, CY_REG_BASE, sizeof(ts->sysinfo_data),
-				      &ts->sysinfo_data);
-	if (error)
-		return error;
+	/*
+	 * The sysinfo block is populated asynchronously after the mode
+	 * switch; a single fixed delay loses the race on some parts, and
+	 * a read taken too early succeeds at the bus level but returns
+	 * all zeros. Poll until the version field is non-zero.
+	 */
+	for (tries = 0; tries < CY_NUM_RETRY; tries++) {
+		msleep(CY_DELAY_DFLT);
+		error = ttsp_read_block_data(ts, CY_REG_BASE,
+					     sizeof(ts->sysinfo_data),
+					     &ts->sysinfo_data);
+		if (error)
+			return error;
+
+		if (ts->sysinfo_data.tts_verh || ts->sysinfo_data.tts_verl)
+			break;
+	}
 
 	error = cyttsp_handshake(ts);
 	if (error)
@@ -363,29 +375,23 @@ static void cyttsp_report_tchdata(struct cyttsp *ts)
 	input_sync(input);
 }
 
-static irqreturn_t cyttsp_irq(int irq, void *handle)
+static void cyttsp_fetch_tchdata(struct cyttsp *ts)
 {
-	struct cyttsp *ts = handle;
 	int error;
-
-	if (unlikely(ts->state == CY_BL_STATE)) {
-		complete(&ts->bl_ready);
-		goto out;
-	}
 
 	/* Get touch data from CYTTSP device */
 	error = ttsp_read_block_data(ts, CY_REG_BASE,
 				 sizeof(struct cyttsp_xydata), &ts->xy_data);
 	if (error)
-		goto out;
+		return;
 
 	/* provide flow control handshake */
 	error = cyttsp_handshake(ts);
 	if (error)
-		goto out;
+		return;
 
 	if (unlikely(ts->state == CY_IDLE_STATE))
-		goto out;
+		return;
 
 	if (GET_BOOTLOADERMODE(ts->xy_data.tt_mode)) {
 		/*
@@ -402,9 +408,25 @@ static irqreturn_t cyttsp_irq(int irq, void *handle)
 	} else {
 		cyttsp_report_tchdata(ts);
 	}
+}
 
-out:
+static irqreturn_t cyttsp_irq(int irq, void *handle)
+{
+	struct cyttsp *ts = handle;
+
+	if (unlikely(ts->state == CY_BL_STATE))
+		complete(&ts->bl_ready);
+	else
+		cyttsp_fetch_tchdata(ts);
+
 	return IRQ_HANDLED;
+}
+
+static void cyttsp_poll(struct input_dev *input)
+{
+	struct cyttsp *ts = input_get_drvdata(input);
+
+	cyttsp_fetch_tchdata(ts);
 }
 
 static int cyttsp_power_on(struct cyttsp *ts)
@@ -412,12 +434,16 @@ static int cyttsp_power_on(struct cyttsp *ts)
 	int error;
 
 	error = cyttsp_soft_reset(ts);
-	if (error)
+	if (error) {
+		dev_err(ts->dev, "soft reset failed: %d\n", error);
 		return error;
+	}
 
 	error = cyttsp_load_bl_regs(ts);
-	if (error)
+	if (error) {
+		dev_err(ts->dev, "load bl regs failed: %d\n", error);
 		return error;
+	}
 
 	if (GET_BOOTLOADERMODE(ts->bl_data.bl_status) &&
 	    IS_VALID_APP(ts->bl_data.bl_status)) {
@@ -430,20 +456,30 @@ static int cyttsp_power_on(struct cyttsp *ts)
 
 	if (GET_HSTMODE(ts->bl_data.bl_file) != CY_OPERATE_MODE ||
 	    IS_OPERATIONAL_ERR(ts->bl_data.bl_status)) {
+		dev_err(ts->dev, "not operational: bl_file %02x bl_status %02x\n",
+			ts->bl_data.bl_file, ts->bl_data.bl_status);
 		return -ENODEV;
 	}
 
 	error = cyttsp_set_sysinfo_mode(ts);
-	if (error)
+	if (error) {
+		dev_err(ts->dev, "set sysinfo mode failed: %d (tts_ver %02x%02x)\n",
+			error, ts->sysinfo_data.tts_verh, ts->sysinfo_data.tts_verl);
 		return error;
+	}
 
 	error = cyttsp_set_sysinfo_regs(ts);
-	if (error)
+	if (error) {
+		dev_err(ts->dev, "set sysinfo regs failed: %d\n", error);
 		return error;
+	}
 
 	error = cyttsp_set_operational_mode(ts);
-	if (error)
+	if (error) {
+		dev_err(ts->dev, "set operational mode failed: %d (act_dist %02x)\n",
+			error, ts->xy_data.act_dist);
 		return error;
+	}
 
 	/* init active distance */
 	error = cyttsp_act_dist_setup(ts);
@@ -473,7 +509,8 @@ static int cyttsp_enable(struct cyttsp *ts)
 	if (GET_HSTMODE(ts->xy_data.hst_mode))
 		return -EIO;
 
-	enable_irq(ts->irq);
+	if (!ts->use_poll)
+		enable_irq(ts->irq);
 
 	return 0;
 }
@@ -486,7 +523,8 @@ static int cyttsp_disable(struct cyttsp *ts)
 	if (error)
 		return error;
 
-	disable_irq(ts->irq);
+	if (!ts->use_poll)
+		disable_irq(ts->irq);
 
 	return 0;
 }
@@ -621,6 +659,7 @@ struct cyttsp *cyttsp_probe(const struct cyttsp_bus_ops *bus_ops,
 	static const char * const supplies[] = { "vcpin", "vdd" };
 	struct cyttsp *ts;
 	struct input_dev *input_dev;
+	u32 poll_ms;
 	int error;
 
 	ts = devm_kzalloc(dev, sizeof(*ts) + xfer_buf_size, GFP_KERNEL);
@@ -676,6 +715,23 @@ struct cyttsp *cyttsp_probe(const struct cyttsp_bus_ops *bus_ops,
 	if (error) {
 		dev_err(dev, "Unable to init MT slots.\n");
 		return ERR_PTR(error);
+	}
+
+	/*
+	 * Some panel firmwares never pulse the interrupt line for touch
+	 * reports (it fires only for bootloader-ready and mode changes);
+	 * the vendor driver on those runs a self-rescheduling poll loop.
+	 * With poll-interval present, poll for data; the IRQ is still
+	 * requested for the soft-reset bootloader-ready completion.
+	 */
+	if (!device_property_read_u32(dev, "poll-interval", &poll_ms)) {
+		error = input_setup_polling(input_dev, cyttsp_poll);
+		if (error) {
+			dev_err(dev, "Unable to set up polling: %d\n", error);
+			return ERR_PTR(error);
+		}
+		input_set_poll_interval(input_dev, poll_ms);
+		ts->use_poll = true;
 	}
 
 	error = devm_request_threaded_irq(dev, ts->irq, NULL, cyttsp_irq,

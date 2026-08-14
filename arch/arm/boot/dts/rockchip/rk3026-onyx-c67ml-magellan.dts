@@ -718,6 +718,23 @@
 		 * pulses it low then high.  gpio2 12 is lcd_d10. */
 		reset-gpios = <&gpio0 27 GPIO_ACTIVE_LOW>;
 		vdd-supply = <&act_ldo1>;
+		/* Mandatory for cyttsp_core: the vendor's exit-bootloader block
+		 * (evidence/boox-zImage @ 0xc08e1e4f) is 00 ff a5 00..07, i.e.
+		 * the driver's own default keys. */
+		bootloader-key = /bits/ 8 <0x00 0x01 0x02 0x03 0x04 0x05 0x06 0x07>;
+		/* The vendor's xy_worker toggles hst_mode bit 0x80 after every
+		 * report (evidence/boox-zImage, cyttsp_xy_worker c06b3048) -- the
+		 * chip holds INT asserted until acked, so without handshake the
+		 * first report wedges the edge-triggered line low. Observed
+		 * exactly so on 2026-08-13: one IRQ at open, then silence. */
+		use-handshake;
+		/* This panel's firmware never pulses INT for touch reports --
+		 * proven 2026-08-13: chip registers track a held finger while
+		 * gpio1 8 stays high; the line edges only at mode changes. The
+		 * vendor's xy_worker is a self-rescheduling poll loop (3 s
+		 * timer backstop). Poll for data; INT still serves the
+		 * soft-reset bootloader-ready completion at probe. */
+		poll-interval = <10>;
 		touchscreen-size-x = <1024>;
 		touchscreen-size-y = <758>;
 	};

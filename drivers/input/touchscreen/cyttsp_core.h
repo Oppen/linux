@@ -123,6 +123,7 @@ struct cyttsp {
 	bool suspended;
 
 	struct gpio_desc *reset_gpio;
+	bool use_poll;
 	bool use_hndshk;
 	u8 act_dist;
 	u8 act_intrvl;
