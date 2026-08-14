@@ -728,12 +728,14 @@
 		 * first report wedges the edge-triggered line low. Observed
 		 * exactly so on 2026-08-13: one IRQ at open, then silence. */
 		use-handshake;
-		/* This panel's firmware never pulses INT for touch reports --
-		 * proven 2026-08-13: chip registers track a held finger while
-		 * gpio1 8 stays high; the line edges only at mode changes. The
-		 * vendor's xy_worker is a self-rescheduling poll loop (3 s
-		 * timer backstop). Poll for data; INT still serves the
-		 * soft-reset bootloader-ready completion at probe. */
+		/* Under mainline INT never pulses for touch reports -- proven
+		 * 2026-08-13: chip registers track a held finger while gpio1 8
+		 * stays high; the line edges only at mode changes. (An earlier
+		 * comment blamed a vendor "poll loop"; re/DRV-TOUCH-2.md
+		 * refutes that -- the vendor is IRQ-driven, so the dead INT is
+		 * ours alone; reset polarity is the open lead, task 78.)
+		 * Poll for data; INT still serves the soft-reset
+		 * bootloader-ready completion at probe. */
 		poll-interval = <10>;
 		/* Measured 2026-08-14 (corner drag + corner tap, device upright):
 		 * origin top-left, X horizontal 0..~758, Y vertical 0..~1024, no
@@ -926,6 +928,43 @@
 		nand-ecc-strength = <40>;
 		nand-ecc-step-size = <1024>;
 		nand-bus-width = <8>;
+
+		/*
+		 * Declared chip is 4096 MiB (the power-of-two workaround; the
+		 * real 4240 MiB cannot be expressed, facts/storage.md), so the
+		 * three regions must sum to 0x100000000.
+		 *   loader: blocks 0-15, IDB + the waveform at raw sector
+		 *           0x800 -- never written, never formatted.
+		 *   bbt:    top 48 visible blocks; the vendor's runtime BBT
+		 *           scan range (last 47 real blocks) dips into
+		 *           blocks 1013-1023, which are visible. The factory
+		 *           BBT blocks (1045-1059) are beyond the declared
+		 *           size and unreachable from mainline either way.
+		 *   rootfs: slc-mode halves erasesize/size via SLC-on-MLC
+		 *           emulation (requires the dist3 pairing hook in
+		 *           nand_sandisk.c); the only region UBI may touch.
+		 */
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "loader";
+				reg = <0x0 0x4000000>;
+				read-only;
+			};
+			partition@4000000 {
+				label = "rootfs";
+				reg = <0x4000000 0xf0000000>;
+				slc-mode;
+			};
+			partition@f4000000 {
+				label = "bbt";
+				reg = <0xf4000000 0xc000000>;
+				read-only;
+			};
+		};
 	};
 };
 
