@@ -433,11 +433,11 @@
 };
 
 &cpu0 {
-	cpu-supply = <&vdd_arm>;
+	cpu-supply = <&VDD_ARM>;
 };
 
 &cpu1 {
-	cpu-supply = <&vdd_arm>;
+	cpu-supply = <&VDD_ARM>;
 };
 
 &uart2 {
@@ -489,34 +489,16 @@
 	 * while LDO1's registers did not -- so the touchscreen's vdd-supply
 	 * phandle below is inherited, not established (PENDING P55).
 	 */
-	act8931: act8931@5b {
-		compatible = "active-semi,act8931";
+	act8931a@5b {
+		compatible = "active-semi,act8945a";
 		reg = <0x5b>;
+		active-semi,vsel-high;
 		status = "okay";
 
-		/* PMU_INT_PIN = RK30_PIN1_PB1 = GPIO1 pin 9 */
-		interrupts = <9 IRQ_TYPE_LEVEL_LOW>;
-		interrupt-parent = <&gpio1>;
-
-		pinctrl-names = "default";
-		pinctrl-0 = <&pmu_int>;
-
-		/*
-		 * Node NAMES are load-bearing and must stay exactly these.
-		 * ACT88xx_REG_ sets .of_match to the descriptor name with
-		 * .regulators_node = "regulators", so the driver matches
-		 * DCDC_REG1..3 / LDO_REG1..4 and nothing else. These were
-		 * act_dcdc1 .. act_ldo4 until 2026-08-08, which would have
-		 * matched NOTHING -- zero regulators registered, every
-		 * consumer deferring with -517 forever, and the symptom
-		 * indistinguishable from "the driver still is not there".
-		 * The labels are independent of the node names, so every
-		 * &act_* phandle elsewhere in this file is untouched.
-		 */
 		regulators {
 			/* DCDC1 -> VCC_IO. Measured 3.193/3.195; VSET 0x37. */
-			act_dcdc1: DCDC_REG1 {
-				regulator-name = "act_dcdc1";
+			VCC_IO: REG_DCDC1 {
+				regulator-name = "VCC_IO";
 				regulator-min-microvolt = <3200000>;
 				regulator-max-microvolt = <3200000>;
 				regulator-always-on;
@@ -524,8 +506,8 @@
 			};
 
 			/* DCDC2 -> VDD_DDR. Measured 1.399/1.398; VSET 0x1b. */
-			act_dcdc2: DCDC_REG2 {
-				regulator-name = "act_dcdc2";
+			VDD_DDR: REG_DCDC2 {
+				regulator-name = "VDD_DDR";
 				regulator-min-microvolt = <1400000>;
 				regulator-max-microvolt = <1400000>;
 				regulator-always-on;
@@ -547,8 +529,8 @@
 			 * and it needs the RK292X AVDD max of 1.32 V resolved
 			 * against a part that ships at 1.45.
 			 */
-			vdd_arm: DCDC_REG3 {
-				regulator-name = "vdd_arm";
+			VDD_ARM: REG_DCDC3 {
+				regulator-name = "VDD_ARM";
 				regulator-min-microvolt = <1450000>;
 				regulator-max-microvolt = <1450000>;
 				regulator-always-on;
@@ -561,8 +543,8 @@
 			 * itself has never been measured; 2.90 V is what 0x34
 			 * decodes to, so this value is DECODED, not measured.
 			 */
-			act_ldo1: LDO_REG1 {
-				regulator-name = "act_ldo1";
+			VDD28_CIF: REG_LDO1 {
+				regulator-name = "VDD28_CIF";
 				regulator-min-microvolt = <2900000>;
 				regulator-max-microvolt = <2900000>;
 				regulator-always-on;
@@ -570,15 +552,15 @@
 			};
 
 			/* LDO2: off, no consumer. VSET 0x37. Decoded. */
-			act_ldo2: LDO_REG2 {
+			REG_LDO2 {
 				regulator-name = "act_ldo2";
 				regulator-min-microvolt = <3200000>;
 				regulator-max-microvolt = <3200000>;
 			};
 
 			/* LDO3 -> VCC_SD, VSET 0x37. Decoded, not measured. */
-			act_ldo3: LDO_REG3 {
-				regulator-name = "act_ldo3";
+			VCC_SD: REG_LDO3 {
+				regulator-name = "VCC_SD";
 				regulator-min-microvolt = <3200000>;
 				regulator-max-microvolt = <3200000>;
 				regulator-always-on;
@@ -595,13 +577,31 @@
 			 * once the kernel owns this chip: U-Boot enables LDO4
 			 * today (f0217092339) and nothing in Linux would.
 			 */
-			act_ldo4: LDO_REG4 {
-				regulator-name = "act_ldo4";
+			LCD_VCC: REG_LDO4 {
+				regulator-name = "LCD_VCC";
 				regulator-min-microvolt = <1850000>;
 				regulator-max-microvolt = <1850000>;
 				regulator-always-on;
 				regulator-boot-on;
 			};
+		};
+
+		charger {
+			compatible = "active-semi,act8945a-charger";
+			// REQUIRED:
+			// - interrupts
+			// - active-semi,chglev-gpios
+			// - active-semi,lbo-gpios
+			// FIXME: check if it's the following ones:
+			/* PMU_INT_PIN = RK30_PIN1_PB1 = GPIO1 pin 9 */
+			/* FIXME
+			* interrupts = <9 IRQ_TYPE_LEVEL_LOW>;
+			* interrupt-parent = <&gpio1>;
+			* 
+			* pinctrl-names = "default";
+			* pinctrl-0 = <&pmu_int>;
+			*/
+
 		};
 	};
 
@@ -717,7 +717,7 @@
 		/* onyx_get_tp_rst_pin returns 155 = gpio0 27; cyttsp_i2c_init
 		 * pulses it low then high.  gpio2 12 is lcd_d10. */
 		reset-gpios = <&gpio0 27 GPIO_ACTIVE_LOW>;
-		vdd-supply = <&act_ldo1>;
+		vdd-supply = <&VDD28_CIF>;
 		/* Mandatory for cyttsp_core: the vendor's exit-bootloader block
 		 * (evidence/boox-zImage @ 0xc08e1e4f) is 00 ff a5 00..07, i.e.
 		 * the driver's own default keys. */
@@ -858,7 +858,7 @@
 	disable-wp;
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdmmc_clk &sdmmc_cmd &sdmmc_cd &sdmmc_bus4>;
-	vmmc-supply = <&act_ldo3>;
+	vmmc-supply = <&VCC_SD>;
 	vqmmc-supply = <&vcc_io>;
 
 	/*
