@@ -54,13 +54,6 @@ enum {
 	ACT8600,
 	ACT8865,
 	ACT8846,
-	/*
-	 * ACT8931 = ACT8865's regulator block plus a charger. Same register
-	 * map, address for address, but its VSET code->voltage mapping is one
-	 * step above the ACT8865's on every range -- see act8931_voltage_ranges
-	 * in act8865-regulator.c, which records how that was measured.
-	 */
-	ACT8931,
 };
 
 /**

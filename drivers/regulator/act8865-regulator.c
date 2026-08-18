@@ -226,34 +226,6 @@ static const struct linear_range act8865_voltage_ranges[] = {
 	REGULATOR_LINEAR_RANGE(2400000, 48, 63, 100000),
 };
 
-/*
- * ACT8931: every range base is one step above the ACT8865's.
- *
- * This contradicts the ACT8931A datasheet, which gives the ACT8865's table,
- * so it is stated here with its evidence. Four rails were measured at the
- * board's ICT pads against the VSET codes read back over I2C -- two regulator
- * types, two ranges, all within 7 mV of one-step-up and 50-100 mV away from
- * the datasheet's value:
- *
- *	rail    VSET  datasheet  measured  this table
- *	DCDC1   0x37    3.100      3.193      3.200
- *	DCDC2   0x1b    1.350      1.399      1.400
- *	DCDC3   0x1c    1.400      1.448      1.450
- *	LDO4    0x24    1.800      1.869      1.850
- *
- * A meter gain error was ruled out by a ratio test (ratios cancel gain):
- * one-step-up fits to 0.15%, the datasheet's table to 0.61%. The LDO4 figure
- * was then taken again with the rail held on and unloaded, reading 1.869 --
- * +1.0% against 1.850, +3.8% against 1.800.
- *
- * The first range is UNTESTED: no rail on the board uses a code below 24.
- */
-static const struct linear_range act8931_voltage_ranges[] = {
-	REGULATOR_LINEAR_RANGE(625000, 0, 23, 25000),
-	REGULATOR_LINEAR_RANGE(1250000, 24, 47, 50000),
-	REGULATOR_LINEAR_RANGE(2500000, 48, 63, 100000),
-};
-
 static const struct linear_range act8600_sudcdc_voltage_ranges[] = {
 	REGULATOR_LINEAR_RANGE(3000000, 0, 63, 0),
 	REGULATOR_LINEAR_RANGE(3000000, 64, 159, 100000),
@@ -462,7 +434,7 @@ static const struct regulator_ops act8865_fixed_ldo_ops = {
 	.is_enabled		= regulator_is_enabled_regmap,
 };
 
-#define ACT88xx_REG__(_name, _family, _id, _vsel_reg, _supply, _ops, _ranges) \
+#define ACT88xx_REG_(_name, _family, _id, _vsel_reg, _supply, _ops)	\
 	[_family##_ID_##_id] = {					\
 		.name			= _name,			\
 		.of_match		= of_match_ptr(_name),		\
@@ -473,8 +445,8 @@ static const struct regulator_ops act8865_fixed_ldo_ops = {
 		.type			= REGULATOR_VOLTAGE,		\
 		.ops			= _ops,				\
 		.n_voltages		= ACT8865_VOLTAGE_NUM,		\
-		.linear_ranges		= _ranges,			\
-		.n_linear_ranges	= ARRAY_SIZE(_ranges),		\
+		.linear_ranges		= act8865_voltage_ranges,	\
+		.n_linear_ranges	= ARRAY_SIZE(act8865_voltage_ranges), \
 		.vsel_reg		= _family##_##_id##_##_vsel_reg, \
 		.vsel_mask		= ACT8865_VSEL_MASK,		\
 		.enable_reg		= _family##_##_id##_CTRL,	\
@@ -484,24 +456,11 @@ static const struct regulator_ops act8865_fixed_ldo_ops = {
 		.owner			= THIS_MODULE,			\
 	}
 
-#define ACT88xx_REG_(_name, _family, _id, _vsel_reg, _supply, _ops) \
-	ACT88xx_REG__(_name, _family, _id, _vsel_reg, _supply, _ops, \
-		      act8865_voltage_ranges)
-
 #define ACT88xx_REG(_name, _family, _id, _vsel_reg, _supply) \
 	ACT88xx_REG_(_name, _family, _id, _vsel_reg, _supply, &act8865_ops)
 
 #define ACT88xx_LDO(_name, _family, _id, _vsel_reg, _supply) \
 	ACT88xx_REG_(_name, _family, _id, _vsel_reg, _supply, &act8865_ldo_ops)
-
-/* Same register map and IDs as the ACT8865, different voltage ranges. */
-#define ACT8931_REG(_name, _id, _vsel_reg, _supply) \
-	ACT88xx_REG__(_name, ACT8865, _id, _vsel_reg, _supply, &act8865_ops, \
-		      act8931_voltage_ranges)
-
-#define ACT8931_LDO(_name, _id, _vsel_reg, _supply) \
-	ACT88xx_REG__(_name, ACT8865, _id, _vsel_reg, _supply, \
-		      &act8865_ldo_ops, act8931_voltage_ranges)
 
 static const struct regulator_desc act8600_regulators[] = {
 	ACT88xx_REG("DCDC1", ACT8600, DCDC1, VSET, "vp1"),
@@ -590,32 +549,11 @@ static const struct regulator_desc act8865_alt_regulators[] = {
 	ACT88xx_LDO("LDO_REG4", ACT8865, LDO4, VSET, "inl67"),
 };
 
-static const struct regulator_desc act8931_regulators[] = {
-	ACT8931_REG("DCDC_REG1", DCDC1, VSET1, "vp1"),
-	ACT8931_REG("DCDC_REG2", DCDC2, VSET1, "vp2"),
-	ACT8931_REG("DCDC_REG3", DCDC3, VSET1, "vp3"),
-	ACT8931_LDO("LDO_REG1", LDO1, VSET, "inl45"),
-	ACT8931_LDO("LDO_REG2", LDO2, VSET, "inl45"),
-	ACT8931_LDO("LDO_REG3", LDO3, VSET, "inl67"),
-	ACT8931_LDO("LDO_REG4", LDO4, VSET, "inl67"),
-};
-
-static const struct regulator_desc act8931_alt_regulators[] = {
-	ACT8931_REG("DCDC_REG1", DCDC1, VSET2, "vp1"),
-	ACT8931_REG("DCDC_REG2", DCDC2, VSET2, "vp2"),
-	ACT8931_REG("DCDC_REG3", DCDC3, VSET2, "vp3"),
-	ACT8931_LDO("LDO_REG1", LDO1, VSET, "inl45"),
-	ACT8931_LDO("LDO_REG2", LDO2, VSET, "inl45"),
-	ACT8931_LDO("LDO_REG3", LDO3, VSET, "inl67"),
-	ACT8931_LDO("LDO_REG4", LDO4, VSET, "inl67"),
-};
-
 #ifdef CONFIG_OF
 static const struct of_device_id act8865_dt_ids[] = {
 	{ .compatible = "active-semi,act8600", .data = (void *)ACT8600 },
 	{ .compatible = "active-semi,act8846", .data = (void *)ACT8846 },
 	{ .compatible = "active-semi,act8865", .data = (void *)ACT8865 },
-	{ .compatible = "active-semi,act8931", .data = (void *)ACT8931 },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, act8865_dt_ids);
@@ -768,18 +706,6 @@ static int act8865_pmic_probe(struct i2c_client *client)
 		off_reg = ACT8865_SYS_CTRL;
 		off_mask = ACT8865_MSTROFF;
 		break;
-	case ACT8931:
-		if (voltage_select) {
-			regulators = act8931_alt_regulators;
-			num_regulators = ARRAY_SIZE(act8931_alt_regulators);
-		} else {
-			regulators = act8931_regulators;
-			num_regulators = ARRAY_SIZE(act8931_regulators);
-		}
-		regmap_config = &act8865_regmap_config;
-		off_reg = ACT8865_SYS_CTRL;
-		off_mask = ACT8865_MSTROFF;
-		break;
 	default:
 		dev_err(dev, "invalid device id %lu\n", type);
 		return -EINVAL;
@@ -845,18 +771,15 @@ static int act8865_pmic_probe(struct i2c_client *client)
 
 	i2c_set_clientdata(client, act8865);
 
-	/* Unlock expert registers for ACT8865 and ACT8931. */
-	if (type != ACT8865 && type != ACT8931)
-		return 0;
-
-	return regmap_write(act8865->regmap, ACT8865_SYS_UNLK_REGS, 0xef);
+	/* Unlock expert registers for ACT8865. */
+	return type != ACT8865 ? 0 : regmap_write(act8865->regmap,
+						  ACT8865_SYS_UNLK_REGS, 0xef);
 }
 
 static const struct i2c_device_id act8865_ids[] = {
 	{ .name = "act8600", .driver_data = ACT8600 },
 	{ .name = "act8846", .driver_data = ACT8846 },
 	{ .name = "act8865", .driver_data = ACT8865 },
-	{ .name = "act8931", .driver_data = ACT8931 },
 	{ },
 };
 MODULE_DEVICE_TABLE(i2c, act8865_ids);
