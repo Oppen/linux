@@ -60,6 +60,7 @@ static const struct i2c_device_id act8945a_i2c_id[] = {
 MODULE_DEVICE_TABLE(i2c, act8945a_i2c_id);
 
 static const struct of_device_id act8945a_of_match[] = {
+	{ .compatible = "active-semi,act8931a", },
 	{ .compatible = "active-semi,act8945a", },
 	{},
 };

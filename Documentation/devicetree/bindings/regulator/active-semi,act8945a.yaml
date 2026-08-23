@@ -11,7 +11,9 @@ maintainers:
 
 properties:
   compatible:
-    const: active-semi,act8945a
+    enum:
+    - active-semi,act8931a
+    - active-semi,act8945a
 
   reg:
     maxItems: 1
@@ -85,7 +87,9 @@ properties:
 
     properties:
       compatible:
-        const: active-semi,act8945a-charger
+        enum:
+        - active-semi,act8931a-charger
+        - active-semi,act8945a-charger
 
       interrupts:
         maxItems: 1
