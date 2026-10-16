@@ -34,6 +34,7 @@ static int ncores;
 
 static struct regmap *pmu;
 static int has_pmu = true;
+static bool reset_assert_starts_core;
 static struct reset_control *cpu_rstc[4];
 
 static int pmu_power_domain_is_on(int pd)
@@ -80,8 +81,11 @@ static int pmu_set_power_domain(int pd, bool on)
 	 * We need to soft reset the cpu when we turn off the cpu power domain,
 	 * or else the active processors might be stalled when the individual
 	 * processor is powered down.
+	 *
+	 * Where the assert itself restarts the core (RK3026), leave a stopped
+	 * core in its WFI loop instead; the "on" path below starts it.
 	 */
-	if (!IS_ERR(rstc) && !on)
+	if (!IS_ERR(rstc) && !on && !reset_assert_starts_core)
 		reset_control_assert(rstc);
 
 	if (has_pmu) {
@@ -103,8 +107,11 @@ static int pmu_set_power_domain(int pd, bool on)
 		}
 	}
 
-	if (!IS_ERR(rstc) && on)
+	if (!IS_ERR(rstc) && on) {
+		if (reset_assert_starts_core)
+			reset_control_assert(rstc);
 		reset_control_deassert(rstc);
+	}
 
 	return 0;
 }
@@ -333,6 +340,8 @@ static void __init rockchip_smp_prepare_cpus(unsigned int max_cpus)
 static void __init rk3036_smp_prepare_cpus(unsigned int max_cpus)
 {
 	has_pmu = false;
+	/* RK3026: asserting the core reset restarts the core */
+	reset_assert_starts_core = of_machine_is_compatible("rockchip,rk3026");
 
 	rockchip_smp_prepare_cpus(max_cpus);
 }
