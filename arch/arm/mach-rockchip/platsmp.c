@@ -37,6 +37,25 @@ static int has_pmu = true;
 static bool reset_assert_starts_core;
 static struct reset_control *cpu_rstc[4];
 
+/*
+ * RK3026: a core leaves reset at address 0, which is the BootROM unless
+ * GRF_SOC_CON0 bit 12 maps the SRAM holding the trampoline there. Keep
+ * that remap set only while a core is being started.
+ */
+#define RK3026_GRF_SOC_CON0		0x140
+#define RK3026_GRF_IMEM_REMAP_SET	(BIT(28) | BIT(12))
+#define RK3026_GRF_IMEM_REMAP_CLR	BIT(28)
+
+static struct regmap *rk3026_grf;
+
+static void rk3026_imem_remap(bool on)
+{
+	if (rk3026_grf)
+		regmap_write(rk3026_grf, RK3026_GRF_SOC_CON0,
+			     on ? RK3026_GRF_IMEM_REMAP_SET :
+				  RK3026_GRF_IMEM_REMAP_CLR);
+}
+
 static int pmu_power_domain_is_on(int pd)
 {
 	u32 val;
@@ -135,10 +154,13 @@ static int rockchip_boot_secondary(unsigned int cpu, struct task_struct *idle)
 		return -ENXIO;
 	}
 
-	/* start the core */
+	/* start the core; it clears the remap in rockchip_secondary_init() */
+	rk3026_imem_remap(true);
 	ret = pmu_set_power_domain(0 + cpu, true);
-	if (ret < 0)
+	if (ret < 0) {
+		rk3026_imem_remap(false);
 		return ret;
+	}
 
 	if (read_cpuid_part() != ARM_CPU_PART_CORTEX_A9) {
 		/*
@@ -339,11 +361,26 @@ static void __init rockchip_smp_prepare_cpus(unsigned int max_cpus)
 
 static void __init rk3036_smp_prepare_cpus(unsigned int max_cpus)
 {
+	struct regmap *grf;
+
 	has_pmu = false;
 	/* RK3026: asserting the core reset restarts the core */
 	reset_assert_starts_core = of_machine_is_compatible("rockchip,rk3026");
 
+	grf = syscon_regmap_lookup_by_compatible("rockchip,rk3026-grf");
+	if (!IS_ERR(grf)) {
+		rk3026_grf = grf;
+		/* the loader may have left the remap set */
+		rk3026_imem_remap(false);
+	}
+
 	rockchip_smp_prepare_cpus(max_cpus);
+}
+
+static void rockchip_secondary_init(unsigned int cpu)
+{
+	/* the trampoline is no longer needed at 0 */
+	rk3026_imem_remap(false);
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
@@ -370,6 +407,7 @@ static void rockchip_cpu_die(unsigned int cpu)
 
 static const struct smp_operations rk3036_smp_ops __initconst = {
 	.smp_prepare_cpus	= rk3036_smp_prepare_cpus,
+	.smp_secondary_init	= rockchip_secondary_init,
 	.smp_boot_secondary	= rockchip_boot_secondary,
 #ifdef CONFIG_HOTPLUG_CPU
 	.cpu_kill		= rockchip_cpu_kill,
