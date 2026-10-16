@@ -44,6 +44,7 @@
 			reg = <0x0>;
 			clocks = <&cru ARMCLK>;
 			operating-points-v2 = <&cpu0_opp_table>;
+			resets = <&cru SRST_CORE0>;
 			#cooling-cells = <2>; /* min followed by max */
 		};
 
@@ -53,6 +54,7 @@
 			reg = <0x1>;
 			clocks = <&cru ARMCLK>;
 			operating-points-v2 = <&cpu0_opp_table>;
+			resets = <&cru SRST_CORE1>;
 		};
 	};
 
@@ -169,6 +171,17 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges = <0 0x10080000 0x2000>;
+
+		/* CPU1 starts at 0, where GRF_SOC_CON0 bit 12 maps IMEM */
+		smp-sram@0 {
+			compatible = "rockchip,rk3066-smp-sram";
+			reg = <0x00 0x10>;
+		};
+	};
+
+	scu@1013c000 {
+		compatible = "arm,cortex-a9-scu";
+		reg = <0x1013c000 0x100>;
 	};
 
 	gic: interrupt-controller@1013d000 {
