@@ -532,15 +532,7 @@
 		#io-channel-cells = <1>;
 		clocks = <&cru SCLK_SARADC>, <&cru PCLK_SARADC>;
 		clock-names = "saradc", "apb_pclk";
-		/*
-		 * No resets property.  rk3026-cru.h numbers SRST_* densely, but
-		 * rockchip_register_softrst() maps id -> (reg = id / 16, bit =
-		 * id % 16), so every id >= 12 names the wrong register AND the
-		 * wrong bit.  SRST_SARADC resolved to CON3 bit 2.  Mis-asserting an
-		 * arbitrary CRU soft reset can be unrecoverable without the
-		 * physical reset pin, so the property is removed until the
-		 * (reg, bit) pairs are proven from a dumped binary.
-		 */
+		/* No resets yet: SRST_SARADC is not checked on hardware */
 		status = "disabled";
 	};
 
@@ -632,15 +624,7 @@
 		 */
 		clocks = <&cru HCLK_NANDC>;
 		clock-names = "ahb";
-		/*
-		 * No resets property.  rk3026-cru.h numbers SRST_* densely, but
-		 * rockchip_register_softrst() maps id -> (reg = id / 16, bit =
-		 * id % 16), so every id >= 12 names the wrong register AND the
-		 * wrong bit.  SRST_NANDC resolved to CON2 bit 8.  Mis-asserting an
-		 * arbitrary CRU soft reset can be unrecoverable without the
-		 * physical reset pin, so the property is removed until the
-		 * (reg, bit) pairs are proven from a dumped binary.
-		 */
+		/* No resets yet: SRST_NANDC is not checked on hardware */
 		pinctrl-names = "default";
 		pinctrl-0 = <&flash_ale &flash_bus8 &flash_cle &flash_csn0 &flash_wp
 			     &flash_rdn &flash_rdy &flash_wrn>;
@@ -658,15 +642,7 @@
 		interrupt-names = "gp", "gpmmu", "pp";
 		clocks = <&cru ACLK_GPU>;
 		clock-names = "bus";
-		/*
-		 * No resets property.  rk3026-cru.h numbers SRST_* densely, but
-		 * rockchip_register_softrst() maps id -> (reg = id / 16, bit =
-		 * id % 16), so every id >= 12 names the wrong register AND the
-		 * wrong bit.  SRST_GPU resolved to CON4 bit 9.  Mis-asserting an
-		 * arbitrary CRU soft reset can be unrecoverable without the
-		 * physical reset pin, so the property is removed until the
-		 * (reg, bit) pairs are proven from a dumped binary.
-		 */
+		/* No resets yet: SRST_GPU is not checked on hardware */
 		status = "disabled";
 	};
 
@@ -676,15 +652,7 @@
 		interrupts = <GIC_SPI 9 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&cru ACLK_LCDC0>, <&cru DCLK_LCDC0>, <&cru HCLK_LCDC0>;
 		clock-names = "aclk_vop", "dclk_vop", "hclk_vop";
-		/*
-		 * No resets property.  rk3026-cru.h numbers SRST_* densely, but
-		 * rockchip_register_softrst() maps id -> (reg = id / 16, bit =
-		 * id % 16), so every id >= 12 names the wrong register AND the
-		 * wrong bit.  SRST_LCDC0_AXI resolved to CON3 bit 9.  Mis-asserting an
-		 * arbitrary CRU soft reset can be unrecoverable without the
-		 * physical reset pin, so the property is removed until the
-		 * (reg, bit) pairs are proven from a dumped binary.
-		 */
+		/* No resets yet: SRST_LCDC0_AXI is not checked on hardware */
 		status = "disabled";
 
 		vop_out: port {
