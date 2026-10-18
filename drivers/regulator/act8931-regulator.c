@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Active-semi ACT8931 PMU: regulators.
+ * Active-semi ACT8931 PMU: regulators and charger state.
  *
  * Every write passes the regmap write callback, which allows only the
  * output registers, keeps the reserved bits and keeps each VSET (both of a
@@ -9,20 +9,26 @@
  *
  * The ON bit is edge-triggered, so ON is the last edge written, not a
  * measurement. OK (power good) is set while the output is in regulation.
+ *
+ * The charger is only read (APCH 0x78 and 0x7a), and polled: the driver
+ * enables none of its interrupts.
  */
 
 #include <linux/bitfield.h>
 #include <linux/bitops.h>
 #include <linux/bits.h>
 #include <linux/delay.h>
+#include <linux/devm-helpers.h>
 #include <linux/i2c.h>
 #include <linux/linear_range.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/power_supply.h>
 #include <linux/regmap.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
 #include <linux/regulator/of_regulator.h>
+#include <linux/workqueue.h>
 
 #define ACT8931_SYS0		0x00
 #define ACT8931_SYS1		0x01
@@ -55,6 +61,21 @@
 #define ACT8931_CTRL_DELAY	GENMASK(4, 2)	/* turn-on delay */
 #define ACT8931_CTRL_OK		BIT(0)	/* power good */
 #define ACT8931_N_VOLTAGES	64
+
+#define ACT8931_STATUS_CHGDAT	BIT(0)	/* end of charge */
+#define ACT8931_STATUS_INDAT	BIT(1)	/* valid input at CHGIN */
+#define ACT8931_STATE_CSTATE	GENMASK(5, 4)
+#define ACT8931_STATE_ACINSTAT	BIT(1)	/* ACIN above 1.2 V: AC mode */
+/* the bits the properties are made of: a change raises a uevent */
+#define ACT8931_STATUS_WATCH	(ACT8931_STATUS_CHGDAT | ACT8931_STATUS_INDAT)
+#define ACT8931_STATE_WATCH	(ACT8931_STATE_CSTATE | ACT8931_STATE_ACINSTAT)
+
+#define ACT8931_CSTATE_OFF	0	/* suspended, disabled or fault */
+#define ACT8931_CSTATE_EOC	1
+#define ACT8931_CSTATE_FAST	2	/* fast charge or top-off */
+#define ACT8931_CSTATE_PRE	3
+
+#define ACT8931_POLL_MS		5000
 
 /*
  * Soft-start: 400 us for the DC/DC converters, 140 us for an LDO at
@@ -130,6 +151,11 @@ struct act8931 {
 	DECLARE_BITMAP(capped, ACT8931_NUM_RAILS);
 	struct of_regulator_match match[ACT8931_NUM_RAILS];
 	struct regulator_desc desc[ACT8931_NUM_RAILS];
+	struct power_supply_desc charger_desc;	/* type follows ACINSTAT */
+	struct power_supply *charger;
+	struct delayed_work poll;
+	unsigned int last_status;
+	unsigned int last_state;
 };
 
 /* ACT8931 output voltage table: three linear ranges of the 6-bit selector */
@@ -619,6 +645,156 @@ static int act8931_register_rail(struct act8931 *chip, int id)
 	return 0;
 }
 
+/* The one reader of APCH 0x78, whose bits 7:4 clear on read */
+static int act8931_charger_read(struct act8931 *chip, unsigned int *status,
+				unsigned int *state)
+{
+	int ret;
+
+	ret = regmap_read(chip->regmap, ACT8931_APCH_STATUS, status);
+	if (ret)
+		return ret;
+	return regmap_read(chip->regmap, ACT8931_APCH_STATE, state);
+}
+
+static int act8931_charger_status(unsigned int status, unsigned int state)
+{
+	switch (FIELD_GET(ACT8931_STATE_CSTATE, state)) {
+	case ACT8931_CSTATE_PRE:
+	case ACT8931_CSTATE_FAST:
+		return POWER_SUPPLY_STATUS_CHARGING;
+	case ACT8931_CSTATE_EOC:
+		if (status & ACT8931_STATUS_CHGDAT)
+			return POWER_SUPPLY_STATUS_FULL;
+		return POWER_SUPPLY_STATUS_NOT_CHARGING;
+	case ACT8931_CSTATE_OFF:
+	default:
+		if (status & ACT8931_STATUS_INDAT)
+			return POWER_SUPPLY_STATUS_NOT_CHARGING;
+		return POWER_SUPPLY_STATUS_DISCHARGING;
+	}
+}
+
+static int act8931_charger_type(unsigned int state)
+{
+	switch (FIELD_GET(ACT8931_STATE_CSTATE, state)) {
+	case ACT8931_CSTATE_PRE:
+		return POWER_SUPPLY_CHARGE_TYPE_TRICKLE;
+	case ACT8931_CSTATE_FAST:
+		return POWER_SUPPLY_CHARGE_TYPE_FAST;
+	default:
+		return POWER_SUPPLY_CHARGE_TYPE_NONE;
+	}
+}
+
+static enum power_supply_type act8931_supply_type(unsigned int state)
+{
+	if (state & ACT8931_STATE_ACINSTAT)
+		return POWER_SUPPLY_TYPE_MAINS;
+	return POWER_SUPPLY_TYPE_USB;
+}
+
+static int act8931_charger_get_property(struct power_supply *psy,
+					enum power_supply_property psp,
+					union power_supply_propval *val)
+{
+	struct act8931 *chip = power_supply_get_drvdata(psy);
+	unsigned int status, state;
+	int ret;
+
+	ret = act8931_charger_read(chip, &status, &state);
+	if (ret)
+		return ret;
+
+	switch (psp) {
+	case POWER_SUPPLY_PROP_ONLINE:
+		val->intval = !!(status & ACT8931_STATUS_INDAT);
+		break;
+	case POWER_SUPPLY_PROP_STATUS:
+		val->intval = act8931_charger_status(status, state);
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_TYPE:
+		val->intval = act8931_charger_type(state);
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static const enum power_supply_property act8931_charger_props[] = {
+	POWER_SUPPLY_PROP_ONLINE,
+	POWER_SUPPLY_PROP_STATUS,
+	POWER_SUPPLY_PROP_CHARGE_TYPE,
+};
+
+static const struct power_supply_desc act8931_charger_desc = {
+	.name		= "act8931-charger",
+	.properties	= act8931_charger_props,
+	.num_properties	= ARRAY_SIZE(act8931_charger_props),
+	.get_property	= act8931_charger_get_property,
+};
+
+static void act8931_poll_arm(struct act8931 *chip)
+{
+	queue_delayed_work(system_freezable_power_efficient_wq, &chip->poll,
+			   msecs_to_jiffies(ACT8931_POLL_MS));
+}
+
+static void act8931_charger_poll(struct work_struct *work)
+{
+	struct act8931 *chip = container_of(work, struct act8931, poll.work);
+	unsigned int status, state;
+
+	if (!act8931_charger_read(chip, &status, &state)) {
+		status &= ACT8931_STATUS_WATCH;
+		state &= ACT8931_STATE_WATCH;
+		if (status != chip->last_status || state != chip->last_state) {
+			chip->last_status = status;
+			chip->last_state = state;
+			chip->charger_desc.type = act8931_supply_type(state);
+			power_supply_changed(chip->charger);
+		}
+	}
+	act8931_poll_arm(chip);
+}
+
+/*
+ * The charger comes first: a failure there leaves no output registered
+ * that a consumer could already hold.
+ */
+static int act8931_charger_init(struct act8931 *chip)
+{
+	struct power_supply_config psy_cfg = { };
+	unsigned int status, state;
+	int ret;
+
+	ret = act8931_charger_read(chip, &status, &state);
+	if (ret)
+		return dev_err_probe(chip->dev, ret,
+				     "charger state read failed\n");
+	chip->last_status = status & ACT8931_STATUS_WATCH;
+	chip->last_state = state & ACT8931_STATE_WATCH;
+	chip->charger_desc = act8931_charger_desc;
+	chip->charger_desc.type = act8931_supply_type(state);
+
+	/* no fwnode: the charger stays out of the board's supply graph */
+	psy_cfg.drv_data = chip;
+	chip->charger = devm_power_supply_register(chip->dev,
+						   &chip->charger_desc,
+						   &psy_cfg);
+	if (IS_ERR(chip->charger))
+		return dev_err_probe(chip->dev, PTR_ERR(chip->charger),
+				     "charger registration failed\n");
+
+	ret = devm_delayed_work_autocancel(chip->dev, &chip->poll,
+					   act8931_charger_poll);
+	if (ret)
+		return ret;
+	act8931_poll_arm(chip);
+	return 0;
+}
+
 static int act8931_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
@@ -679,6 +855,10 @@ static int act8931_probe(struct i2c_client *client)
 		return dev_err_probe(dev, ret, "no answer at 0x%02x\n",
 				     client->addr);
 
+	ret = act8931_charger_init(chip);
+	if (ret)
+		return ret;
+
 	for (i = 0; i < ACT8931_NUM_RAILS; i++) {
 		ret = act8931_register_rail(chip, i);
 		if (ret)
@@ -710,6 +890,6 @@ static struct i2c_driver act8931_driver = {
 };
 module_i2c_driver(act8931_driver);
 
-MODULE_DESCRIPTION("Active-semi ACT8931 regulators");
+MODULE_DESCRIPTION("Active-semi ACT8931 regulators and charger state");
 MODULE_AUTHOR("Sergei Khomenkov <shomenkow@gmail.com>");
 MODULE_LICENSE("GPL");

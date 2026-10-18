@@ -107,13 +107,15 @@ config REGULATOR_ACT8865
 	  regulator via I2C bus.
 
 config REGULATOR_ACT8931
-	tristate "Active-semi ACT8931 regulators"
+	tristate "Active-semi ACT8931 regulators and charger state"
 	depends on I2C
+	depends on POWER_SUPPLY
 	select REGMAP
 	help
 	  This driver supports the Active-semi ACT8931 PMU: three step-down
-	  converters and four LDOs, controlled over I2C. It reports every
-	  output, sets the DCDC3 voltage and switches LDO4.
+	  converters, four LDOs and a linear battery charger, controlled
+	  over I2C. It reports every output, sets the DCDC3 voltage and
+	  switches LDO4, and reports the charger state as a power supply.
 	  To compile it as a module, choose M here: the module will be
 	  called act8931-regulator.
 
