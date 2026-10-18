@@ -230,6 +230,19 @@
 		rockchip,grf = <&grf>;
 		#clock-cells = <1>;
 		#reset-cells = <1>;
+		/*
+		 * GPLL and the buses at the vendor's rates. The bus rates come
+		 * from the dividers clk-rk3026.c writes before GPLL goes up
+		 * (rk3026_gpll_dividers); keep the two in sync.
+		 */
+		assigned-clocks = <&cru PLL_GPLL>,
+				  <&cru ACLK_CPU>, <&cru HCLK_CPU>, <&cru PCLK_CPU>,
+				  <&cru ACLK_PERI>, <&cru HCLK_PERI>, <&cru PCLK_PERI>,
+				  <&cru HCLK_DISP_PRE>, <&cru ACLK_LCDC1_SRC>;
+		assigned-clock-rates = <768000000>,
+				       <192000000>, <96000000>, <48000000>,
+				       <192000000>, <96000000>, <48000000>,
+				       <256000000>, <256000000>;
 	};
 
 	grf: syscon@20008000 {
@@ -711,8 +724,9 @@
 		 * "dclk-parent" is GPLL, asserted as dclk's parent by the driver
 		 * AFTER clk_set_rate(); assigned-clock-parents here was a no-op
 		 * because CCF already believed dclk was on GPLL while the mux bit
-		 * said CPLL. GPLL is 132 MHz, so 66 MHz is the reachable maximum
-		 * (vendor runs 80, which needs CPLL at 560 -- docs/BLOCKERS.md).
+		 * said CPLL. GPLL is 768 MHz, so dclk is 768 MHz / n: a 66 MHz
+		 * request gets /12 = 64 MHz (vendor runs 80, which needs CPLL at
+		 * 560 -- docs/BLOCKERS.md).
 		 */
 		clocks = <&cru HCLK_EBC>, <&cru DCLK_EBC>, <&cru ACLK_LCDC1>,
 			 <&cru ACLK_EBC>, <&cru PLL_GPLL>;
