@@ -106,6 +106,17 @@ config REGULATOR_ACT8865
 	  This driver controls a active-semi act8865 voltage output
 	  regulator via I2C bus.
 
+config REGULATOR_ACT8931
+	tristate "Active-semi ACT8931 regulators"
+	depends on I2C
+	select REGMAP
+	help
+	  This driver supports the Active-semi ACT8931 PMU: three step-down
+	  converters and four LDOs, controlled over I2C. It reports every
+	  output, sets the DCDC3 voltage and switches LDO4.
+	  To compile it as a module, choose M here: the module will be
+	  called act8931-regulator.
+
 config REGULATOR_ACT8945A
 	tristate "Active-semi ACT8945A voltage regulator"
 	depends on MFD_ACT8945A
