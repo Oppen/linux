@@ -222,6 +222,20 @@
 		 */
 		arm,tag-latency = <1 1 1>;
 		arm,data-latency = <3 1 2>;
+		/*
+		 * As the vendor kernel sets it up on every RK3026: 16 ways of
+		 * 16 KiB, the datasheet's 256 KiB (the reset AUX_CTRL says 8
+		 * ways), data and instruction prefetch, double linefill and
+		 * prefetch offset 3. Applied only if the L2 is still disabled
+		 * when the kernel starts.
+		 */
+		cache-size = <262144>;
+		cache-sets = <512>;
+		cache-line-size = <32>;
+		prefetch-data = <1>;
+		prefetch-instr = <1>;
+		arm,double-linefill = <1>;
+		arm,prefetch-offset = <3>;
 	};
 
 	cru: clock-controller@20000000 {
