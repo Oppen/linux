@@ -4,16 +4,30 @@
 $id: http://devicetree.org/schemas/regulator/active-semi,act8945a.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Active-semi ACT8945a regulator
+title: Active-semi ACT8945A and ACT8931A PMICs
 
 maintainers:
   - Paul Cercueil <paul@crapouillou.net>
 
+description: |
+  The ACT8945A and ACT8931A are PMICs with three step-down DC/DC converters
+  and four low-dropout linear regulators, controlled over I2C, and an
+  ActivePath battery charger.
+
+  The ACT8931A has the seven outputs of the ACT8945A at the same register
+  addresses, without the suspend mode and the suspend registers. Its four
+  LDOs share one input pin, INL: a board names the same supply in
+  inl45-supply and inl67-supply. It is not a system power controller: the
+  board powers off by dropping its PWRHLD input. Its charge current and
+  input current limit are set by the ISET resistor and the CHGLEV and ACIN
+  pins, so its charger has nothing to describe and takes no node; the
+  charger state is read through the PMIC registers.
+
 properties:
   compatible:
     enum:
-    - active-semi,act8931a
-    - active-semi,act8945a
+      - active-semi,act8931a
+      - active-semi,act8945a
 
   reg:
     maxItems: 1
@@ -87,9 +101,7 @@ properties:
 
     properties:
       compatible:
-        enum:
-        - active-semi,act8931a-charger
-        - active-semi,act8945a-charger
+        const: active-semi,act8945a-charger
 
       interrupts:
         maxItems: 1
@@ -137,6 +149,24 @@ required:
   - reg
   - compatible
   - regulators
+
+allOf:
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: active-semi,act8931a
+    then:
+      properties:
+        system-power-controller: false
+        charger: false
+        regulators:
+          patternProperties:
+            "^REG_":
+              properties:
+                regulator-state-mem: false
+                regulator-state-disk: false
+                regulator-state-standby: false
 
 examples:
   - |
@@ -270,6 +300,41 @@ examples:
           active-semi,input-voltage-threshold-microvolt = <6600>;
           active-semi,precondition-timeout = <40>;
           active-semi,total-timeout = <3>;
+        };
+      };
+    };
+
+  - |
+    i2c {
+      #address-cells = <1>;
+      #size-cells = <0>;
+
+      pmic@5b {
+        compatible = "active-semi,act8931a";
+        reg = <0x5b>;
+        active-semi,vsel-high;
+
+        regulators {
+          REG_DCDC1 {
+            regulator-name = "vcc_io";
+            regulator-min-microvolt = <3300000>;
+            regulator-max-microvolt = <3300000>;
+            regulator-always-on;
+          };
+
+          REG_DCDC3 {
+            regulator-name = "vdd_arm";
+            regulator-min-microvolt = <950000>;
+            regulator-max-microvolt = <1400000>;
+            regulator-ramp-delay = <500>;
+            regulator-always-on;
+          };
+
+          REG_LDO4 {
+            regulator-name = "vcc_lcd";
+            regulator-min-microvolt = <3100000>;
+            regulator-max-microvolt = <3100000>;
+          };
         };
       };
     };
