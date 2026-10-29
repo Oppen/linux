@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Power supply driver for the Active-semi ACT8945A PMIC
+ * Power supply driver for the Active-semi ACT8945A and ACT8931A PMICs
  *
  * Copyright (C) 2015 Atmel Corporation
  *
  * Author: Wenyou Yang <wenyou.yang@atmel.com>
  */
+#include <linux/devm-helpers.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -15,6 +16,7 @@
 #include <linux/regmap.h>
 #include <linux/gpio/consumer.h>
 
+static const char *act8931a_charger_model = "ACT8931A";
 static const char *act8945a_charger_model = "ACT8945A";
 static const char *act8945a_charger_manufacturer = "Active-semi";
 
@@ -72,11 +74,26 @@ static const char *act8945a_charger_manufacturer = "Active-semi";
 #define APCH_STATE_CSTATE_FAST		0x02
 #define APCH_STATE_CSTATE_PRE		0x03
 
+/*
+ * The ACT8931A charger is polled: its properties are read from APCH 0x78
+ * and 0x7A, and a change of the bits they are made of raises a change event.
+ */
+#define ACT8931A_POLL_MS		5000
+#define ACT8931A_STATUS_WATCH		(APCH_STATUS_CHGDAT | APCH_STATUS_INDAT | \
+					 APCH_STATUS_TEMPDAT | APCH_STATUS_TIMRDAT)
+
+enum act8945a_type {
+	ACT8931A,
+	ACT8945A,
+};
+
 struct act8945a_charger {
 	struct power_supply *psy;
 	struct power_supply_desc desc;
 	struct regmap *regmap;
 	struct work_struct work;
+	struct delayed_work poll;
+	unsigned int poll_state;
 
 	bool init_done;
 	struct gpio_desc *lbo_gpio;
@@ -118,6 +135,20 @@ static int act8945a_get_charger_state(struct regmap *regmap, int *val)
 			*val = POWER_SUPPLY_STATUS_NOT_CHARGING;
 		break;
 	}
+
+	return 0;
+}
+
+static int act8931a_get_online(struct regmap *regmap, int *val)
+{
+	unsigned int status;
+	int ret;
+
+	ret = regmap_read(regmap, ACT8945A_APCH_STATUS, &status);
+	if (ret < 0)
+		return ret;
+
+	*val = !!(status & APCH_STATUS_INDAT);
 
 	return 0;
 }
@@ -339,6 +370,21 @@ static enum power_supply_property act8945a_charger_props[] = {
 	POWER_SUPPLY_PROP_MANUFACTURER
 };
 
+/*
+ * ACT8931A: the charger has no DT node, so no LBO and CHGLEV GPIOs and no
+ * charge current data: no capacity level and no maximum current; the input
+ * state instead.
+ */
+static const enum power_supply_property act8931a_charger_props[] = {
+	POWER_SUPPLY_PROP_ONLINE,
+	POWER_SUPPLY_PROP_STATUS,
+	POWER_SUPPLY_PROP_CHARGE_TYPE,
+	POWER_SUPPLY_PROP_TECHNOLOGY,
+	POWER_SUPPLY_PROP_HEALTH,
+	POWER_SUPPLY_PROP_MODEL_NAME,
+	POWER_SUPPLY_PROP_MANUFACTURER
+};
+
 static int act8945a_charger_get_property(struct power_supply *psy,
 					 enum power_supply_property prop,
 					 union power_supply_propval *val)
@@ -379,6 +425,33 @@ static int act8945a_charger_get_property(struct power_supply *psy,
 	}
 
 	return ret;
+}
+
+/*
+ * ACT8931A: online from INDAT, its own model name, no capacity level and
+ * no maximum current; the rest as on the ACT8945A. ONLINE stays out of
+ * the ACT8945A getter: the power supply core asks every supply for it
+ * whatever its property list says (power_supply_am_i_supplied(),
+ * power_supply_is_system_supplied()), and the ACT8945A answers -EINVAL.
+ */
+static int act8931a_charger_get_property(struct power_supply *psy,
+					 enum power_supply_property prop,
+					 union power_supply_propval *val)
+{
+	struct act8945a_charger *charger = power_supply_get_drvdata(psy);
+
+	switch (prop) {
+	case POWER_SUPPLY_PROP_ONLINE:
+		return act8931a_get_online(charger->regmap, &val->intval);
+	case POWER_SUPPLY_PROP_MODEL_NAME:
+		val->strval = act8931a_charger_model;
+		return 0;
+	case POWER_SUPPLY_PROP_CAPACITY_LEVEL:
+	case POWER_SUPPLY_PROP_CURRENT_MAX:
+		return -EINVAL;
+	default:
+		return act8945a_charger_get_property(psy, prop, val);
+	}
 }
 
 static int act8945a_enable_interrupt(struct act8945a_charger *charger)
@@ -571,11 +644,97 @@ static int act8945a_charger_config(struct device *dev,
 	return regmap_write(regmap, ACT8945A_APCH_CFG, value);
 }
 
+static int act8931a_poll_state(struct regmap *regmap, unsigned int *val)
+{
+	unsigned int status, state;
+	int ret;
+
+	ret = regmap_read(regmap, ACT8945A_APCH_STATUS, &status);
+	if (ret < 0)
+		return ret;
+
+	ret = regmap_read(regmap, ACT8945A_APCH_STATE, &state);
+	if (ret < 0)
+		return ret;
+
+	*val = (status & ACT8931A_STATUS_WATCH) << 8 |
+	       (state & APCH_STATE_CSTATE);
+
+	return 0;
+}
+
+static void act8931a_poll(struct work_struct *work)
+{
+	struct act8945a_charger *charger =
+		container_of(to_delayed_work(work), struct act8945a_charger,
+			     poll);
+	unsigned int state;
+
+	if (!act8931a_poll_state(charger->regmap, &state) &&
+	    state != charger->poll_state) {
+		charger->poll_state = state;
+		power_supply_changed(charger->psy);
+	}
+
+	queue_delayed_work(system_freezable_power_efficient_wq, &charger->poll,
+			   msecs_to_jiffies(ACT8931A_POLL_MS));
+}
+
+/*
+ * The ACT8931A charger is read only: APCH_CFG keeps the safety timers and
+ * the input over-voltage threshold the board has set, no interrupt is
+ * enabled (0x78 and 0x79 are not written) and the state is polled, with or
+ * without an nIRQ line. The supply type is fixed: ACINSTAT is the level of
+ * the ACIN pin, which selects the input current limit, not the kind of
+ * supply.
+ */
+static int act8931a_charger_probe(struct platform_device *pdev,
+				  struct act8945a_charger *charger)
+{
+	struct power_supply_config psy_cfg = {};
+	int ret;
+
+	ret = act8931a_poll_state(charger->regmap, &charger->poll_state);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret,
+				     "failed to read the charger state\n");
+
+	charger->desc.name = "act8931a-charger";
+	charger->desc.type = POWER_SUPPLY_TYPE_USB;
+	charger->desc.get_property = act8931a_charger_get_property;
+	charger->desc.properties = act8931a_charger_props;
+	charger->desc.num_properties = ARRAY_SIZE(act8931a_charger_props);
+
+	/* the PMIC node: a fuel gauge can name the charger in power-supplies */
+	psy_cfg.fwnode = dev_fwnode(pdev->dev.parent);
+	psy_cfg.drv_data = charger;
+
+	charger->psy = devm_power_supply_register(&pdev->dev, &charger->desc,
+						  &psy_cfg);
+	if (IS_ERR(charger->psy))
+		return dev_err_probe(&pdev->dev, PTR_ERR(charger->psy),
+				     "failed to register power supply\n");
+
+	ret = devm_delayed_work_autocancel(&pdev->dev, &charger->poll,
+					   act8931a_poll);
+	if (ret)
+		return ret;
+
+	queue_delayed_work(system_freezable_power_efficient_wq, &charger->poll,
+			   msecs_to_jiffies(ACT8931A_POLL_MS));
+
+	return 0;
+}
+
 static int act8945a_charger_probe(struct platform_device *pdev)
 {
+	const struct platform_device_id *id = platform_get_device_id(pdev);
 	struct act8945a_charger *charger;
 	struct power_supply_config psy_cfg = {};
 	int irq, ret;
+
+	if (!id)
+		return -ENODEV;
 
 	charger = devm_kzalloc(&pdev->dev, sizeof(*charger), GFP_KERNEL);
 	if (!charger)
@@ -586,6 +745,13 @@ static int act8945a_charger_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Parent did not provide regmap\n");
 		return -EINVAL;
 	}
+
+	platform_set_drvdata(pdev, charger);
+
+	INIT_WORK(&charger->work, act8945a_work);
+
+	if (id->driver_data == ACT8931A)
+		return act8931a_charger_probe(pdev, charger);
 
 	ret = act8945a_charger_config(&pdev->dev, charger);
 	if (ret)
@@ -625,10 +791,6 @@ static int act8945a_charger_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	platform_set_drvdata(pdev, charger);
-
-	INIT_WORK(&charger->work, act8945a_work);
-
 	ret = act8945a_enable_interrupt(charger);
 	if (ret)
 		return -EIO;
@@ -646,15 +808,23 @@ static void act8945a_charger_remove(struct platform_device *pdev)
 	cancel_work_sync(&charger->work);
 }
 
+static const struct platform_device_id act8945a_charger_id[] = {
+	{ "act8931a-charger", ACT8931A },
+	{ "act8945a-charger", ACT8945A },
+	{ }
+};
+MODULE_DEVICE_TABLE(platform, act8945a_charger_id);
+
 static struct platform_driver act8945a_charger_driver = {
 	.driver	= {
 		.name = "act8945a-charger",
 	},
 	.probe	= act8945a_charger_probe,
 	.remove	= act8945a_charger_remove,
+	.id_table = act8945a_charger_id,
 };
 module_platform_driver(act8945a_charger_driver);
 
-MODULE_DESCRIPTION("Active-semi ACT8945A ActivePath charger driver");
+MODULE_DESCRIPTION("Active-semi ACT8945A and ACT8931A ActivePath charger driver");
 MODULE_AUTHOR("Wenyou Yang <wenyou.yang@atmel.com>");
 MODULE_LICENSE("GPL");

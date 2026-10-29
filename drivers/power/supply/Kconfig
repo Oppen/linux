@@ -104,11 +104,11 @@ config CHARGER_ADP5061
 	  called adp5061.
 
 config BATTERY_ACT8945A
-	tristate "Active-semi ACT8945A charger driver"
+	tristate "Active-semi ACT8945A and ACT8931A charger driver"
 	depends on MFD_ACT8945A || COMPILE_TEST
 	help
 	  Say Y here to enable support for power supply provided by
-	  Active-semi ActivePath ACT8945A charger.
+	  Active-semi ActivePath ACT8945A and ACT8931A chargers.
 
 config BATTERY_CHAGALL
 	tristate "Pegatron Chagall battery driver"
