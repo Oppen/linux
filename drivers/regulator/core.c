@@ -1659,11 +1659,8 @@ static int set_machine_constraints(struct regulator_dev *rdev,
 			ret = (is_locked
 			       ? _regulator_enable(rdev->supply)
 			       : regulator_enable(rdev->supply));
-			if (ret < 0) {
-				_regulator_put(rdev->supply);
-				rdev->supply = NULL;
+			if (ret < 0)
 				return ret;
-			}
 			supply_enabled = true;
 		}
 
@@ -6245,6 +6242,7 @@ unset_supplies:
 	regulator_remove_coupling(rdev);
 	mutex_unlock(&regulator_list_mutex);
 wash:
+	unregister_regulator_event_forwarding(rdev);
 	regulator_put(rdev->supply);
 	kfree(rdev->coupling_desc.coupled_rdevs);
 	mutex_lock(&regulator_list_mutex);
