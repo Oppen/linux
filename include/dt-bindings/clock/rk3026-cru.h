@@ -184,107 +184,125 @@
 /*
  * Soft Resets
  *
- * Reset blocks organized by CRU_SOFTRSTS_CON registers (0-8)
- * Each register contains multiple reset bits
+ * Ids are 16 * CON + bit: the reset driver maps an id to
+ * CRU_SOFTRST_CON(id / 16), bit (id % 16). Names follow the vendor
+ * enum cru_soft_reset; unnamed bits are reserved.
  */
 
 /* SOFTRST_CON0 */
-#define SRST_CORE0		0
-#define SRST_CORE1		1
-#define SRST_CORE0_DBG		2
-#define SRST_CORE1_DBG		3
-#define SRST_CORE_NOC		4
-#define SRST_STRC_A9_NOC	5
-#define SRST_L2MEM		6
-#define SRST_AXI_BUS		7
-#define SRST_CORE_PERIPH	8
-#define SRST_CPUSYS_H		9
-#define SRST_AHB2APB		10
-#define SRST_DDR_MSCH		11
+#define SRST_CORE_SRST_WDT_SEL	0
+#define SRST_MCORE		2
+#define SRST_CORE0		3
+#define SRST_CORE1		4
+#define SRST_MCORE_DBG		7
+#define SRST_CORE0_DBG		8
+#define SRST_CORE1_DBG		9
+#define SRST_CORE0_WDT		10
+#define SRST_CORE1_WDT		11
+#define SRST_ACLK_CORE		13
+#define SRST_STRC_SYS_AXI	14
+#define SRST_L2C		15
 
 /* SOFTRST_CON1 */
-#define SRST_DLL_DDR		12
-#define SRST_DLL_LOGIC		13
-#define SRST_DLL_GPU		14
-#define SRST_DLL_VIDEO		15
-#define SRST_TIMER0		16
-#define SRST_TIMER1		17
-#define SRST_ACODEC_APB		18
+#define SRST_CPUSYS_AHB		17
+#define SRST_L2MEM_CON_AXI	18
+#define SRST_AHB2APB		19
+#define SRST_INTMEM		21
+#define SRST_ROM		22
+#define SRST_PERI_NIU		23
+#define SRST_I2S		24
+#define SRST_DDR_DLL		25
+#define SRST_GPU_DLL		26
+#define SRST_TIMER0		27
+#define SRST_TIMER1		28
+#define SRST_CORE_DLL		29
+#define SRST_EFUSE_APB		30
+#define SRST_ACODEC		31
 
 /* SOFTRST_CON2 */
-#define SRST_GPIO0		19
-#define SRST_GPIO1		20
-#define SRST_GPIO2		21
-#define SRST_GPIO3		22
-#define SRST_UART0		23
-#define SRST_UART1		24
-#define SRST_UART2		25
-#define SRST_I2C0		26
-#define SRST_I2C1		27
-#define SRST_I2C2		28
-#define SRST_I2C3		29
+#define SRST_GPIO0		32
+#define SRST_GPIO1		33
+#define SRST_GPIO2		34
+#define SRST_GPIO3		35
+#define SRST_UART0		39
+#define SRST_UART1		40
+#define SRST_UART2		41
+#define SRST_I2C0		43
+#define SRST_I2C1		44
+#define SRST_I2C2		45
+#define SRST_I2C3		46
 
 /* SOFTRST_CON3 */
-#define SRST_PWM		30
-#define SRST_DAP_PO		31
-#define SRST_DAP		32
-#define SRST_CRYPTO		33
-#define SRST_GRF		34
-#define SRST_PERIPH_NOC		35
-#define SRST_PERIPH_AXI_MATRIX	36
-#define SRST_PERIPH_AHB_ARBI	37
+#define SRST_PWM0		48
+#define SRST_PWM1		49
+#define SRST_DAP_PO		50
+#define SRST_DAP		51
+#define SRST_DAP_SYS		52
+#define SRST_CRYPTO		53
+#define SRST_GRF		55
+#define SRST_PERIPHSYS_AXI	57
+#define SRST_PERIPHSYS_AHB	58
+#define SRST_PERIPHSYS_APB	59
+#define SRST_PWM2		60
+#define SRST_CPU_PERI		61
+#define SRST_EMEM_PERI		62
+#define SRST_USB_PERI		63
 
 /* SOFTRST_CON4 */
-#define SRST_DMAC		38
-#define SRST_GPS		39
-#define SRST_NANDC		40
-#define SRST_USBOTG		41
-#define SRST_USBHOST		42
-#define SRST_USBGRF		43
-#define SRST_DDRMSCH		44
+#define SRST_DMA2		64
+#define SRST_GPS		67
+#define SRST_NANDC		68
+#define SRST_USBOTG0		69
+#define SRST_OTGC0		71
+#define SRST_USBOTG1		72
+#define SRST_OTGC1		74
+#define SRST_DDRMSCH		79
 
 /* SOFTRST_CON5 */
-#define SRST_MMC0		45
-#define SRST_SDIO		46
-#define SRST_EMMC		47
-#define SRST_SPI		48
-#define SRST_WDT		49
-#define SRST_SARADC		50
-#define SRST_DDRPHY		51
-#define SRST_DDRPHY_APB		52
-#define SRST_DDRCTL		53
-#define SRST_DDRCTL_APB		54
+#define SRST_MMC0		81
+#define SRST_SDIO		82
+#define SRST_EMMC		83
+#define SRST_SPI0		84
+#define SRST_WDT		86
+#define SRST_SARADC		87
+#define SRST_DDRPHY		88
+#define SRST_DDRPHY_APB		89
+#define SRST_DDRCTRL		90
+#define SRST_DDRCTRL_APB	91
 
 /* SOFTRST_CON6 */
-#define SRST_HDMI		55
-#define SRST_VIO_BUS_H		56
-#define SRST_LCDC0_AXI		57
-#define SRST_LCDC0_AHB		58
-#define SRST_LCDC0_DCLK		59
-#define SRST_LCDC1_AXI		60
-#define SRST_LCDC1_AHB		61
-#define SRST_LCDC1_DCLK		62
-#define SRST_UHOST0		63
-#define SRST_UHOST1		64
-#define SRST_IEP_AXI		65
-#define SRST_IEP_AHB		66
-#define SRST_RGA_AXI		67
-#define SRST_RGA_AHB		68
-#define SRST_CIF0		69
+#define SRST_HDMI_PCLK		96
+#define SRST_VIO_ARBI_AHB	97
+#define SRST_VIO0_AXI		98
+#define SRST_VIO_BUS_AHB	99
+#define SRST_LCDC0_AXI		100
+#define SRST_LCDC0_AHB		101
+#define SRST_LCDC0_DCLK		102
+#define SRST_UTMI0		103
+#define SRST_UTMI1		104
+#define SRST_USBPOR		105
+#define SRST_IEP_AXI		106
+#define SRST_IEP_AHB		107
+#define SRST_RGA_AXI		108
+#define SRST_RGA_AHB		109
+#define SRST_CIF0		110
 
 /* SOFTRST_CON7 */
-#define SRST_VCODEC_AXI		70
-#define SRST_VCODEC_AHB		71
-#define SRST_VIO_H2P_BRG	72
-#define SRST_GPU		73
-#define SRST_UTMI0		74
-#define SRST_UTMI1		75
-#define SRST_EBC_AHB		76
-#define SRST_EBC_AXI		77
+#define SRST_VCODEC_AXI		112
+#define SRST_VCODEC_AHB		113
+#define SRST_VIO1_AXI		114
+#define SRST_VCODEC_NIU_AXI	116
+#define SRST_LCDC1_AXI		117
+#define SRST_LCDC1_AHB		118
+#define SRST_LCDC1_DCLK		119
+#define SRST_GPU		120
+#define SRST_GPU_NIU_AXI	122
+#define SRST_EBC_AXI		123
+#define SRST_EBC_AHB		124
 
 /* SOFTRST_CON8 */
-#define SRST_CORE_DBG		78
-#define SRST_DBG_APB		79
+#define SRST_CORE_DBG		130
+#define SRST_DBG_APB		131
 
 #define SRST_NR_RESETS		(SRST_DBG_APB + 1)
 

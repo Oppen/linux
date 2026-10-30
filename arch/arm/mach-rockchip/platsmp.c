@@ -34,6 +34,33 @@ static int ncores;
 
 static struct regmap *pmu;
 static int has_pmu = true;
+static bool reset_assert_starts_core;
+static struct reset_control *cpu_rstc[4];
+
+/*
+ * RK3026: a core leaves reset at address 0, which is the BootROM unless
+ * GRF_SOC_CON0 bit 12 maps the SRAM holding the trampoline there. Keep
+ * that remap set only while a core is being started.
+ */
+#define RK3026_GRF_SOC_CON0		0x140
+#define RK3026_GRF_IMEM_REMAP_SET	(BIT(28) | BIT(12))
+#define RK3026_GRF_IMEM_REMAP_CLR	BIT(28)
+
+static void __iomem *rk3026_grf;
+
+/*
+ * A plain write, not the syscon regmap: setting the remap must not take a
+ * lock, whose unlock ends in SEV (see the "on" path of
+ * pmu_set_power_domain()). The write-enable mask in bits 31:16 makes it
+ * touch bit 12 only, so it needs no lock against other GRF users.
+ */
+static void rk3026_imem_remap(bool on)
+{
+	u32 val = on ? RK3026_GRF_IMEM_REMAP_SET : RK3026_GRF_IMEM_REMAP_CLR;
+
+	if (rk3026_grf)
+		writel(val, rk3026_grf + RK3026_GRF_SOC_CON0);
+}
 
 static int pmu_power_domain_is_on(int pd)
 {
@@ -64,8 +91,10 @@ static struct reset_control *rockchip_get_core_reset(int cpu)
 static int pmu_set_power_domain(int pd, bool on)
 {
 	u32 val = (on) ? 0 : BIT(pd);
-	struct reset_control *rstc = rockchip_get_core_reset(pd);
+	struct reset_control *rstc;
 	int ret;
+
+	rstc = pd < ARRAY_SIZE(cpu_rstc) ? cpu_rstc[pd] : ERR_PTR(-EINVAL);
 
 	if (IS_ERR(rstc) && read_cpuid_part() != ARM_CPU_PART_CORTEX_A9) {
 		pr_err("%s: could not get reset control for core %d\n",
@@ -77,8 +106,11 @@ static int pmu_set_power_domain(int pd, bool on)
 	 * We need to soft reset the cpu when we turn off the cpu power domain,
 	 * or else the active processors might be stalled when the individual
 	 * processor is powered down.
+	 *
+	 * Where the assert itself restarts the core (RK3026), leave a stopped
+	 * core in its WFI loop instead; the "on" path below starts it.
 	 */
-	if (!IS_ERR(rstc) && !on)
+	if (!IS_ERR(rstc) && !on && !reset_assert_starts_core)
 		reset_control_assert(rstc);
 
 	if (has_pmu) {
@@ -100,10 +132,30 @@ static int pmu_set_power_domain(int pd, bool on)
 		}
 	}
 
-	if (!IS_ERR(rstc)) {
-		if (on)
-			reset_control_deassert(rstc);
-		reset_control_put(rstc);
+	if (!IS_ERR(rstc) && on && !reset_assert_starts_core)
+		reset_control_deassert(rstc);
+
+	if (!IS_ERR(rstc) && on && reset_assert_starts_core) {
+		unsigned long flags;
+
+		/*
+		 * RK3026: map the SRAM at 0 right before the assert that
+		 * restarts the core. A core parked by the BootROM waits in WFE
+		 * at a low address; once the SRAM is mapped, any SEV wakes it
+		 * to fetch SRAM contents at that address instead of the
+		 * trampoline. Every spin_unlock ends in SEV, and on the
+		 * dual-core RK3026 this CPU is the only other one running. So
+		 * from the remap write to the assert, run with interrupts off
+		 * (no preemption either) and take no lock: the GRF write is a
+		 * plain writel, and the soft reset controller writes its
+		 * HIWORD-masked register without a lock. The new core clears
+		 * the remap in rockchip_secondary_init().
+		 */
+		local_irq_save(flags);
+		rk3026_imem_remap(true);
+		reset_control_assert(rstc);
+		reset_control_deassert(rstc);
+		local_irq_restore(flags);
 	}
 
 	return 0;
@@ -128,7 +180,6 @@ static int rockchip_boot_secondary(unsigned int cpu, struct task_struct *idle)
 		return -ENXIO;
 	}
 
-	/* start the core */
 	ret = pmu_set_power_domain(0 + cpu, true);
 	if (ret < 0)
 		return ret;
@@ -312,6 +363,10 @@ static void __init rockchip_smp_prepare_cpus(unsigned int max_cpus)
 		ncores = ((l2ctlr >> 24) & 0x3) + 1;
 	}
 
+	/* Collect cpu core reset control for each core */
+	for (i = 0; i < ncores; i++)
+		cpu_rstc[i] = rockchip_get_core_reset(i);
+
 	/* Make sure that all cores except the first are really off */
 	for (i = 1; i < ncores; i++)
 		pmu_set_power_domain(0 + i, false);
@@ -328,9 +383,27 @@ static void __init rockchip_smp_prepare_cpus(unsigned int max_cpus)
 
 static void __init rk3036_smp_prepare_cpus(unsigned int max_cpus)
 {
+	struct device_node *np;
+
 	has_pmu = false;
+	/* RK3026: asserting the core reset restarts the core */
+	reset_assert_starts_core = of_machine_is_compatible("rockchip,rk3026");
+
+	np = of_find_compatible_node(NULL, NULL, "rockchip,rk3026-grf");
+	if (np) {
+		rk3026_grf = of_iomap(np, 0);
+		of_node_put(np);
+		/* the loader may have left the remap set */
+		rk3026_imem_remap(false);
+	}
 
 	rockchip_smp_prepare_cpus(max_cpus);
+}
+
+static void rockchip_secondary_init(unsigned int cpu)
+{
+	/* the trampoline is no longer needed at 0 */
+	rk3026_imem_remap(false);
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
@@ -357,6 +430,7 @@ static void rockchip_cpu_die(unsigned int cpu)
 
 static const struct smp_operations rk3036_smp_ops __initconst = {
 	.smp_prepare_cpus	= rk3036_smp_prepare_cpus,
+	.smp_secondary_init	= rockchip_secondary_init,
 	.smp_boot_secondary	= rockchip_boot_secondary,
 #ifdef CONFIG_HOTPLUG_CPU
 	.cpu_kill		= rockchip_cpu_kill,
