@@ -1020,10 +1020,11 @@
 
 	panel-timing {
 		/*
-		 * 16.5 MHz source clock -> dclk 66 MHz (the driver runs dclk at 4x
-		 * this: four 2-bit pixels per source clock). GPLL is 132 MHz, so
-		 * /2 is the fastest this PLL can give; the vendor's 20 MHz (dclk
-		 * 80) needs CPLL at 560 and is a separate change.
+		 * 16.5 MHz source clock -> dclk 66 MHz requested (the driver runs
+		 * dclk at 4x this: four 2-bit pixels per source clock). GPLL is
+		 * 768 MHz, so the divider gives 768 / 12 = 64 MHz, a 16 MHz source
+		 * clock; the vendor's 20 MHz (dclk 80) needs CPLL at 560 and is a
+		 * separate change.
 		 *
 		 * ⚠️ This was 3 MHz (dclk 12) until 2026-08-06, with a comment
 		 * calling every rate above ~12 MHz garbage and blaming the EBC's
@@ -1044,8 +1045,9 @@
 		 * 50 mm `circle`. A 38-frame refresh: 3010 ms at dclk 12, 570 ms
 		 * here.
 		 *
-		 * 🔴 This rate depends on clk-rk3026.c parking CLKSEL_CON30 on
-		 * GPLL. Raising it without that is what "renders garbage" meant.
+		 * 🔴 This rate depends on clk-rk3026.c selecting GPLL in
+		 * CLKSEL_CON30. Raising it without that is what "renders garbage"
+		 * meant.
 		 */
 		clock-frequency = <16500000>;
 		hactive = <1024>;
