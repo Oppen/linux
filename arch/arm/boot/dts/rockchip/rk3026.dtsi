@@ -584,9 +584,10 @@
 	};
 
 	sdmmc: mmc@10214000 {
-		compatible = "rockchip,rk3026-dw-mshc", "rockchip,rk3288-dw-mshc";
+		compatible = "rockchip,rk2928-dw-mshc";
 		reg = <0x10214000 0x4000>;
 		interrupts = <GIC_SPI 14 IRQ_TYPE_LEVEL_HIGH>;
+		clock-frequency = <48000000>;
 		clocks = <&cru HCLK_SDMMC>, <&cru SCLK_SDMMC>;
 		clock-names = "biu", "ciu";
 		fifo-depth = <0x100>;
@@ -596,7 +597,7 @@
 	};
 
 	sdio: mmc@10218000 {
-		compatible = "rockchip,rk3026-dw-mshc", "rockchip,rk3288-dw-mshc";
+		compatible = "rockchip,rk2928-dw-mshc";
 		reg = <0x10218000 0x4000>;
 		interrupts = <GIC_SPI 15 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&cru HCLK_SDIO>, <&cru SCLK_SDIO>;
@@ -608,7 +609,7 @@
 	};
 
 	emmc: mmc@1021c000 {
-		compatible = "rockchip,rk3026-dw-mshc", "rockchip,rk3288-dw-mshc";
+		compatible = "rockchip,rk2928-dw-mshc";
 		reg = <0x1021c000 0x4000>;
 		interrupts = <GIC_SPI 16 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&cru HCLK_EMMC>, <&cru SCLK_EMMC>;
